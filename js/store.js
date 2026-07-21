@@ -181,6 +181,14 @@ const Store = {
     if (!data.settings.calendarDayOrders || typeof data.settings.calendarDayOrders !== 'object') {
       data.settings.calendarDayOrders = {};
     }
+    if (!data.settings.calendarTheme || data.settings.calendarTheme === 'default') {
+      data.settings.calendarTheme = 'summary';
+      changed = true;
+    }
+    if (!data.settings.calendarWashDays || typeof data.settings.calendarWashDays !== 'object') {
+      data.settings.calendarWashDays = {};
+      changed = true;
+    }
     if (!Array.isArray(data.settings.customBaguBanks)) {
       data.settings.customBaguBanks = [];
       changed = true;
@@ -2202,6 +2210,114 @@ const Store = {
       createdAt: task.createdAt || '',
       updatedAt: task.updatedAt || '',
     };
+  },
+
+  getCalendarTheme() {
+    const id = String(this.getSettings().calendarTheme || 'summary');
+    const valid = typeof CALENDAR_THEMES !== 'undefined' ? CALENDAR_THEMES.some((t) => t.id === id) : true;
+    return valid ? id : 'summary';
+  },
+
+  setCalendarTheme(themeId) {
+    const id = String(themeId || 'summary');
+    const allowed =
+      typeof CALENDAR_THEMES !== 'undefined' ? CALENDAR_THEMES.some((t) => t.id === id) : true;
+    const data = this.load();
+    data.settings = data.settings || {};
+    data.settings.calendarTheme = allowed ? id : 'summary';
+    this.save(data);
+    return data.settings.calendarTheme;
+  },
+
+  getCalendarWashDays() {
+    const map = this.getSettings().calendarWashDays;
+    return map && typeof map === 'object' ? { ...map } : {};
+  },
+
+  isCalendarWashDay(dateStr) {
+    if (!dateStr) return false;
+    return Boolean(this.getCalendarWashDays()[dateStr]);
+  },
+
+  toggleCalendarWashDay(dateStr, force = null) {
+    if (!dateStr) return false;
+    const data = this.load();
+    data.settings = data.settings || {};
+    data.settings.calendarWashDays =
+      data.settings.calendarWashDays && typeof data.settings.calendarWashDays === 'object'
+        ? { ...data.settings.calendarWashDays }
+        : {};
+    const next = force == null ? !data.settings.calendarWashDays[dateStr] : Boolean(force);
+    if (next) data.settings.calendarWashDays[dateStr] = true;
+    else delete data.settings.calendarWashDays[dateStr];
+    this.save(data);
+    return next;
+  },
+
+  /** 学习主题：八股 + 手撕 按日计数 */
+  getStudyActivityByDate(startDate, endDate) {
+    const map = new Map();
+    const bump = (date) => {
+      const d = String(date || '').slice(0, 10);
+      if (!d || (startDate && d < startDate) || (endDate && d > endDate)) return;
+      map.set(d, (map.get(d) || 0) + 1);
+    };
+    this.getRawRecords('core', 'bagu').forEach((r) => bump(r.date || r.createdAt));
+    this.getRawRecords('core', 'handwrite').forEach((r) => bump(r.date || r.createdAt));
+    return map;
+  },
+
+  /** 睡眠视图：按日汇总总时长 + 首个长睡眠入睡时间 */
+  getSleepActivityByDate(startDate, endDate) {
+    const parseTime = (value) => {
+      const m = String(value || '').match(/^(\d{1,2}):(\d{2})$/);
+      if (!m) return null;
+      const h = Number(m[1]);
+      const min = Number(m[2]);
+      if (!Number.isFinite(h) || !Number.isFinite(min) || h > 23 || min > 59) return null;
+      return h * 60 + min;
+    };
+    const durationMins = (bedtime, wakeup) => {
+      const bed = parseTime(bedtime);
+      const wake = parseTime(wakeup);
+      if (bed == null || wake == null) return 0;
+      let end = wake;
+      if (end <= bed) end += 24 * 60;
+      return end - bed;
+    };
+    /** 以中午为日界，越早入睡排序越靠前 */
+    const bedSortKey = (bedMin) => ((bedMin - 12 * 60) % (24 * 60) + 24 * 60) % (24 * 60);
+
+    const byDate = new Map();
+    this.getRawRecords('living', 'sleep').forEach((r) => {
+      const d = String(r.date || '').slice(0, 10);
+      if (!d || (startDate && d < startDate) || (endDate && d > endDate)) return;
+      if (!byDate.has(d)) byDate.set(d, []);
+      byDate.get(d).push(r);
+    });
+
+    const map = new Map();
+    byDate.forEach((list, d) => {
+      let totalMins = 0;
+      const longs = [];
+      list.forEach((r) => {
+        totalMins += durationMins(r.bedtime, r.wakeup);
+        const isNap = String(r.sleepType || 'long').toLowerCase() === 'nap';
+        if (!isNap) {
+          const bedMin = parseTime(r.bedtime);
+          if (bedMin != null) longs.push({ record: r, bedMin });
+        }
+      });
+      longs.sort((a, b) => bedSortKey(a.bedMin) - bedSortKey(b.bedMin));
+      const firstLong = longs[0] || null;
+      map.set(d, {
+        count: list.length,
+        totalMins,
+        bedTime: firstLong ? String(firstLong.record.bedtime || '') : '',
+        bedMinutes: firstLong ? firstLong.bedMin : null,
+      });
+    });
+    return map;
   },
 
   getCalendarTasks() {

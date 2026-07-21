@@ -502,13 +502,6 @@ const App = {
   },
 
   renderHome() {
-    const todayRecords = Store.getTodayRecords();
-    const todaySet = new Set(todayRecords.map((r) => `${r.module.deptId}.${r.module.id}`));
-
-    const quickModules = getAllModules().filter((m) =>
-      ['health', 'sleep', 'facemask', 'hairmask', 'hairremoval', 'exercise'].includes(m.id)
-    );
-
     return `
       <div class="chat-panel ${Store.isChatCollapsed() ? 'is-collapsed' : ''}" id="chatPanel">
         ${this.renderChatPanel()}
@@ -521,32 +514,9 @@ const App = {
 
       ${this.renderYearCalendar()}
 
-      <div class="section-title">我的打卡卡片</div>
+      <div class="section-title">快捷打卡</div>
       <div class="card-grid" id="cardGrid">
         ${this.renderCards()}
-      </div>
-
-      <div class="today-panel">
-        <h3>⚡ 系统快捷打卡</h3>
-        <div class="today-grid">
-          ${quickModules
-            .map((m) => {
-              const key = `${m.deptId}.${m.id}`;
-              const done =
-                m.recordView === 'habitChecklist'
-                  ? Store.isHabitDoneToday(m.deptId, m.id, m.habitChecklist || [])
-                  : m.recordView === 'weekdayCheckin'
-                    ? Store.isWeekdayCheckedToday(m.deptId, m.id)
-                    : todaySet.has(key);
-              return `
-                <div class="today-chip ${done ? 'done' : ''}"
-                  data-dept="${m.deptId}" data-module="${m.id}">
-                  <span class="icon">${m.icon}</span>
-                  <span>${m.name}${done ? ' ✓' : ''}</span>
-                </div>`;
-            })
-            .join('')}
-        </div>
       </div>
 
       <div class="section-title" style="margin-top:28px">四大部门</div>
@@ -2543,6 +2513,61 @@ const App = {
     return `${h} h ${m} min`;
   },
 
+  formatSleepDurationCompact(mins) {
+    if (mins == null || !Number.isFinite(mins) || mins <= 0) return '';
+    const total = Math.round(mins);
+    const h = Math.floor(total / 60);
+    const m = total % 60;
+    if (!h) return `${m}m`;
+    if (!m) return `${h}h`;
+    return `${h}h${String(m).padStart(2, '0')}`;
+  },
+
+  /** 入睡时刻 → 格子内纵向位置（偏下；21:00→03:00 窗口放大起伏） */
+  sleepBedtimeToYPercent(bedMinutes) {
+    if (bedMinutes == null || !Number.isFinite(bedMinutes)) return 55;
+    const DAY = 24 * 60;
+    const fromNoon = ((bedMinutes - 12 * 60) % DAY + DAY) % DAY;
+    const winLo = 9 * 60; // 21:00
+    const winHi = 15 * 60; // 03:00
+    let t = (fromNoon - winLo) / (winHi - winLo);
+    t = Math.max(0, Math.min(1, t));
+    const yTop = 38;
+    const yBot = 72;
+    return yTop + t * (yBot - yTop);
+  },
+
+  /** 睡眠总时长 → 格子半透明底色（越长越深） */
+  sleepDurationToCellFill(mins) {
+    if (mins == null || !Number.isFinite(mins) || mins <= 0) return '';
+    const lo = 3 * 60;
+    const hi = 10 * 60;
+    const t = Math.max(0, Math.min(1, (mins - lo) / (hi - lo)));
+    const alpha = 0.1 + t * 0.38;
+    return `rgba(99, 102, 241, ${alpha.toFixed(3)})`;
+  },
+
+  renderCalendarWeekSleepOverlay(weekCells, sleepByDate) {
+    if (!sleepByDate) return '';
+    const pts = [];
+    weekCells.forEach((cell, i) => {
+      const info = sleepByDate.get(cell.dateStr);
+      if (!info || info.bedMinutes == null) return;
+      pts.push({
+        x: ((i + 0.5) / 7) * 100,
+        y: this.sleepBedtimeToYPercent(info.bedMinutes),
+      });
+    });
+    if (pts.length < 2) return '';
+
+    return `
+      <svg class="year-cal-sleep-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <polyline class="year-cal-sleep-polyline" fill="none" points="${pts
+          .map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`)
+          .join(' ')}" />
+      </svg>`;
+  },
+
   renderSleepMonthView(records) {
     const anchor = this.getSleepViewAnchor();
     const metric = this.sleepMonthMetric === 'long' || this.sleepMonthMetric === 'nap'
@@ -3588,8 +3613,7 @@ const App = {
           <div class="bagu-detail-actions">
             ${
               bank.custom
-                ? `<button type="button" class="btn btn-ghost btn-sm btn-edit-bagu-bank" data-bank="${this.escapeHtml(bankId)}" title="编辑题库">编辑题库</button>
-            <button type="button" class="btn btn-ghost btn-sm btn-delete-bagu-bank" data-bank="${this.escapeHtml(bankId)}" title="删除题库">删除题库</button>`
+                ? `<button type="button" class="btn btn-ghost btn-sm btn-edit-bagu-bank" data-bank="${this.escapeHtml(bankId)}" title="编辑题库">编辑题库</button>`
                 : ''
             }
             <button type="button" class="btn btn-ghost btn-sm btn-bagu-smart-sort" title="按难度与学习曲线自动分类排序">智能排序</button>
@@ -3868,6 +3892,7 @@ const App = {
       ? `确定删除题库「${bank.name}」及其下的 ${count} 道题目吗？此操作不可撤销。`
       : `确定删除题库「${bank.name}」吗？`;
     if (!confirm(msg)) return;
+    this.closeModal();
     Store.deleteCustomBaguBank(bankId, { deleteQuestions: true });
     if (this.route.baguBank === bankId) {
       this.navigate('module', { deptId: 'core', moduleId: 'bagu' });
@@ -3928,7 +3953,14 @@ const App = {
         <input type="text" id="baguBankCategoriesInput" maxlength="200" placeholder="多个分类用逗号分隔，如 基础,进阶,实战"
           value="${this.escapeHtml(draft.categories)}">
         <p class="form-hint">添加题目时可快速选择；也可之后在题目里自定义分类</p>
-      </div>`;
+      </div>
+      ${
+        isEdit
+          ? `<div class="form-group bagu-bank-delete-row">
+              <button type="button" class="btn btn-ghost btn-sm is-danger" id="btnDeleteBaguBank">删除题库</button>
+            </div>`
+          : ''
+      }`;
 
     const syncLogoPreview = () => {
       const preview = document.getElementById('baguBankLogoPreview');
@@ -3964,6 +3996,13 @@ const App = {
     document.getElementById('btnBaguBankLogoClear')?.addEventListener('click', () => {
       this.baguBankDraft.iconSrc = '';
       syncLogoPreview();
+    });
+
+    document.getElementById('btnDeleteBaguBank')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!existing?.id) return;
+      this.deleteBaguBankWithConfirm(existing.id);
     });
 
     form.onsubmit = (e) => {
@@ -6450,6 +6489,52 @@ const App = {
     const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
     const gridStart = cells[0]?.dateStr;
     const gridEnd = cells[cells.length - 1]?.dateStr;
+    const themeId = Store.getCalendarTheme();
+    const themeMeta =
+      typeof getCalendarThemeMeta === 'function' ? getCalendarThemeMeta(themeId) : { id: themeId, name: '汇总' };
+    const studyByDate = themeId === 'study' ? Store.getStudyActivityByDate(gridStart, gridEnd) : null;
+    const sleepByDate = themeId === 'sleep' ? Store.getSleepActivityByDate(gridStart, gridEnd) : null;
+    const washDays = themeId === 'wash' ? Store.getCalendarWashDays() : null;
+
+    const renderThemeMark = (dateStr) => {
+      if (themeId === 'summary' || themeId === 'sleep') return '';
+      if (themeId === 'study') {
+        const n = studyByDate?.get(dateStr) || 0;
+        if (!n) return '';
+        return `<span class="year-cal-theme-mark is-study" title="学习记录 ${n} 条">${n > 9 ? '9+' : n}</span>`;
+      }
+      if (themeId === 'wash' && washDays?.[dateStr]) {
+        return `<span class="year-cal-theme-mark is-wash" title="已洗头">💧</span>`;
+      }
+      return '';
+    };
+
+    const renderSleepCellBody = (dateStr) => {
+      if (themeId !== 'sleep') return '';
+      const info = sleepByDate?.get(dateStr);
+      if (!info?.count) return '';
+      const dur = this.formatSleepDurationCompact(info.totalMins);
+      const tipParts = [];
+      if (dur) tipParts.push(`总时长 ${dur}`);
+      if (info.bedTime) tipParts.push(`入睡 ${info.bedTime}`);
+      const y =
+        info.bedMinutes != null ? this.sleepBedtimeToYPercent(info.bedMinutes) : null;
+      return `
+        ${
+          dur
+            ? `<span class="year-cal-sleep-dur" title="${this.escapeHtml(tipParts.join(' · '))}">${this.escapeHtml(dur)}</span>`
+            : ''
+        }
+        ${
+          y != null && info.bedTime
+            ? `<span class="year-cal-sleep-bed" style="top:${y.toFixed(1)}%" title="入睡 ${this.escapeHtml(info.bedTime)}">${this.escapeHtml(info.bedTime)}</span>
+               <span class="year-cal-sleep-dot" style="top:${y.toFixed(1)}%" title="入睡 ${this.escapeHtml(info.bedTime)}"></span>`
+            : y != null
+              ? `<span class="year-cal-sleep-dot" style="top:${y.toFixed(1)}%"></span>`
+              : ''
+        }`;
+    };
+
     const gridTasks = Store.getCalendarTasks().filter(
       (t) => t.startDate <= gridEnd && t.endDate >= gridStart
     );
@@ -6457,6 +6542,7 @@ const App = {
     const maxBarLanes = 3;
 
     const weekRows = [];
+    const showCalendarEvents = themeId === 'summary';
     for (let w = 0; w < cells.length; w += 7) {
       const weekCells = cells.slice(w, w + 7);
       const dayButtons = weekCells
@@ -6468,25 +6554,40 @@ const App = {
           const hasSubs = dayTasks.some((t) => Store.hasCalendarSubOnDate(t, cell.dateStr));
           const isSelected = viewDate === cell.dateStr;
           const isToday = cell.dateStr === today;
+          const sleepInfo = themeId === 'sleep' ? sleepByDate?.get(cell.dateStr) : null;
+          const sleepFill =
+            sleepInfo?.totalMins > 0 ? this.sleepDurationToCellFill(sleepInfo.totalMins) : '';
           const classes = [
             'year-cal-day',
             cell.outside || !inYear ? 'is-outside' : '',
             isSelected ? 'is-selected' : '',
             isToday ? 'is-today' : '',
-            dayTasks.length ? 'has-tasks' : '',
-            hasSubs ? 'has-subs' : '',
+            showCalendarEvents && dayTasks.length ? 'has-tasks' : '',
+            showCalendarEvents && hasSubs ? 'has-subs' : '',
+            themeId === 'study' && studyByDate?.get(cell.dateStr) ? 'has-theme-mark' : '',
+            themeId === 'sleep' && sleepInfo?.count ? 'has-theme-mark is-sleep-day' : '',
+            themeId === 'wash' && washDays?.[cell.dateStr] ? 'has-theme-mark' : '',
           ]
             .filter(Boolean)
             .join(' ');
+          const sleepStyle = sleepFill ? ` style="--sleep-fill:${sleepFill}"` : '';
           return `
-            <button type="button" class="${classes}" data-date="${cell.dateStr}" title="${cell.dateStr}">
+            <button type="button" class="${classes}" data-date="${cell.dateStr}" title="${cell.dateStr}"${sleepStyle}>
               <span class="year-cal-day-num">${cell.day}</span>
-              ${hasSubs ? '<span class="year-cal-day-sub-mark" title="有子事项记录"></span>' : ''}
+              ${renderSleepCellBody(cell.dateStr)}
+              ${renderThemeMark(cell.dateStr)}
+              ${showCalendarEvents && hasSubs ? '<span class="year-cal-day-sub-mark" title="有子事项记录"></span>' : ''}
             </button>`;
         })
         .join('');
-      const events = this.renderCalendarWeekEvents(weekCells, gridTasks, laneById, maxBarLanes);
-      weekRows.push(`<div class="year-cal-week">${dayButtons}${events}</div>`);
+      const events = showCalendarEvents
+        ? this.renderCalendarWeekEvents(weekCells, gridTasks, laneById, maxBarLanes)
+        : themeId === 'sleep'
+          ? this.renderCalendarWeekSleepOverlay(weekCells, sleepByDate)
+          : '';
+      weekRows.push(
+        `<div class="year-cal-week${themeId === 'sleep' ? ' is-sleep-view' : ''}">${dayButtons}${events}</div>`
+      );
     }
     const dayCells = weekRows.join('');
 
@@ -6561,19 +6662,92 @@ const App = {
           .join('')
       : '<li class="year-cal-month-task-empty">本月暂无事项</li>';
 
+    const themeMenu = (typeof CALENDAR_THEMES !== 'undefined' ? CALENDAR_THEMES : [])
+      .map(
+        (t) => `
+      <button type="button" class="year-cal-theme-option ${themeId === t.id ? 'is-active' : ''}" data-calendar-theme="${t.id}" role="menuitem">
+        <span class="year-cal-theme-option-icon" aria-hidden="true">${t.icon || ''}</span>
+        <span class="year-cal-theme-option-text">
+          <strong>${this.escapeHtml(t.name)}</strong>
+          <small>${this.escapeHtml(t.desc || '')}</small>
+        </span>
+        ${themeId === t.id ? '<span class="year-cal-theme-option-check">✓</span>' : ''}
+      </button>`
+      )
+      .join('');
+
+    const washOn = themeId === 'wash' && Store.isCalendarWashDay(viewDate);
+    const themeDayExtra =
+      themeId === 'wash'
+        ? `<div class="year-cal-theme-day-action">
+            <button type="button" class="btn btn-sm ${washOn ? 'btn-secondary' : 'btn-primary'} btn-year-cal-wash-toggle">
+              ${washOn ? '✓ 今日已洗头（点此取消）' : '标记今日洗头'}
+            </button>
+          </div>`
+        : themeId === 'sleep'
+          ? (() => {
+              const info = sleepByDate?.get(viewDate);
+              const sleepList = Store.getRawRecords('living', 'sleep').filter(
+                (r) => String(r.date || '').slice(0, 10) === viewDate
+              );
+              if (!sleepList.length) {
+                return `<div class="year-cal-theme-day-hint">这一天还没有睡眠记录</div>`;
+              }
+              const dur = this.formatSleepDurationFromMinutes(info?.totalMins);
+              const bed = info?.bedTime ? ` · 首个长睡眠入睡 ${info.bedTime}` : '';
+              const rows = sleepList
+                .map((r) => {
+                  const kind = this.normalizeSleepType(r.sleepType) === 'nap' ? '小憩' : '长睡眠';
+                  const one = this.formatSleepDuration(r.bedtime, r.wakeup) || '—';
+                  return `<li class="year-cal-sleep-record"><span class="k">${kind}</span><span class="v">${this.escapeHtml(String(r.bedtime || '—'))} → ${this.escapeHtml(String(r.wakeup || '—'))} · ${this.escapeHtml(one)}</span></li>`;
+                })
+                .join('');
+              return `
+                <div class="year-cal-theme-day-hint">总时长 ${this.escapeHtml(dur || '—')}${this.escapeHtml(bed)}</div>
+                <ul class="year-cal-sleep-record-list">${rows}</ul>`;
+            })()
+          : themeId === 'study'
+            ? (() => {
+                const n = Store.getStudyActivityByDate(viewDate, viewDate).get(viewDate) || 0;
+                return n
+                  ? `<div class="year-cal-theme-day-hint">学习相关记录 ${n} 条（八股 / 手撕）</div>`
+                  : `<div class="year-cal-theme-day-hint">这一天还没有学习记录</div>`;
+              })()
+            : '';
+
+    const monthPanelHead =
+      themeId === 'summary' ? '月度事项' : `月度 · ${themeMeta.name}`;
+    const dayPanelTasks =
+      themeId === 'summary'
+        ? `<ul class="year-cal-task-list">${taskList}</ul>`
+        : themeId === 'wash'
+          ? ''
+          : '';
+
     return `
-      <section class="year-calendar" data-year="${year}" data-month="${month}">
+      <section class="year-calendar mode-${this.escapeHtml(themeId)}" data-year="${year}" data-month="${month}" data-theme="${this.escapeHtml(themeId)}">
         <div class="year-cal-head">
           <div class="year-cal-year-switch">
             <button type="button" class="btn btn-ghost btn-sm btn-year-cal-year-prev" title="上一年">‹</button>
             <span class="year-cal-title">${this.formatCalendarYearLabel(year)}</span>
             <button type="button" class="btn btn-ghost btn-sm btn-year-cal-year-next" title="下一年">›</button>
           </div>
-          <div class="year-cal-create-wrap">
-            <button type="button" class="btn btn-primary btn-sm btn-year-cal-create" title="新增事项" aria-haspopup="true" aria-expanded="false">+</button>
-            <div class="year-cal-create-menu hidden" role="menu">
-              <button type="button" class="year-cal-create-option" data-kind="task" role="menuitem">新增任务</button>
-              <button type="button" class="year-cal-create-option" data-kind="schedule" role="menuitem">新增日程</button>
+          <div class="year-cal-head-actions">
+            <div class="year-cal-theme-wrap">
+              <button type="button" class="icon-btn btn-year-cal-theme" title="切换视图：${this.escapeHtml(themeMeta.name)}" aria-haspopup="true" aria-expanded="false" aria-label="切换日历视图">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 6a1 1 0 0 1 1 1v1.07a7.002 7.002 0 0 1 2.9 1.2l.76-.76a1 1 0 1 1 1.41 1.41l-.76.76A7.002 7.002 0 0 1 18.93 13H20a1 1 0 1 1 0 2h-1.07a7.002 7.002 0 0 1-1.2 2.9l.76.76a1 1 0 0 1-1.41 1.41l-.76-.76A7.002 7.002 0 0 1 13 18.93V20a1 1 0 1 1-2 0v-1.07a7.002 7.002 0 0 1-2.9-1.2l-.76.76a1 1 0 0 1-1.41-1.41l.76-.76A7.002 7.002 0 0 1 5.07 15H4a1 1 0 1 1 0-2h1.07a7.002 7.002 0 0 1 1.2-2.9l-.76-.76a1 1 0 0 1 1.41-1.41l.76.76A7.002 7.002 0 0 1 11 8.07V7a1 1 0 0 1 1-1zm0 4a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
+              </button>
+              <div class="year-cal-theme-menu hidden" role="menu">
+                <div class="year-cal-theme-menu-title">切换视图</div>
+                ${themeMenu}
+              </div>
+            </div>
+            <div class="year-cal-create-wrap">
+              <button type="button" class="btn btn-primary btn-sm btn-year-cal-create" title="新增事项" aria-haspopup="true" aria-expanded="false">+</button>
+              <div class="year-cal-create-menu hidden" role="menu">
+                <button type="button" class="year-cal-create-option" data-kind="task" role="menuitem">新增任务</button>
+                <button type="button" class="year-cal-create-option" data-kind="schedule" role="menuitem">新增日程</button>
+              </div>
             </div>
           </div>
         </div>
@@ -6585,8 +6759,12 @@ const App = {
               <button type="button" class="btn btn-ghost btn-sm btn-year-cal-next" title="下个月">›</button>
             </div>
             <div class="year-cal-month-panel">
-              <div class="year-cal-month-panel-head">月度事项</div>
-              <ul class="year-cal-month-task-list">${monthTaskList}</ul>
+              <div class="year-cal-month-panel-head">${this.escapeHtml(monthPanelHead)}</div>
+              <ul class="year-cal-month-task-list">${
+                themeId === 'summary'
+                  ? monthTaskList
+                  : `<li class="year-cal-month-task-empty">${this.escapeHtml(themeMeta.name)}视图 · 点选日期查看当日详情</li>`
+              }</ul>
             </div>
           </aside>
           <div class="year-cal-board">
@@ -6597,8 +6775,9 @@ const App = {
           </div>
         </div>
         <div class="year-cal-day-panel">
-          <div class="year-cal-day-panel-head">${this.escapeHtml(this.formatCalendarDayLabel(viewDate))} ${this.escapeHtml(this.formatCalendarWeekday(viewDate))} · 事项</div>
-          <ul class="year-cal-task-list">${taskList}</ul>
+          <div class="year-cal-day-panel-head">${this.escapeHtml(this.formatCalendarDayLabel(viewDate))} ${this.escapeHtml(this.formatCalendarWeekday(viewDate))} · ${this.escapeHtml(themeId === 'summary' ? '事项' : themeMeta.name)}</div>
+          ${themeDayExtra}
+          ${themeId === 'summary' ? `<ul class="year-cal-task-list">${taskList}</ul>` : ''}
         </div>
         <button type="button" class="year-cal-help-btn btn-year-cal-help" title="使用教程" aria-label="使用教程">?</button>
       </section>`;
@@ -6641,6 +6820,37 @@ const App = {
       setYear((this.calendarYear ?? new Date().getFullYear()) + 1);
     });
 
+    root.querySelector('.btn-year-cal-theme')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const menu = root.querySelector('.year-cal-theme-menu');
+      const btn = root.querySelector('.btn-year-cal-theme');
+      if (!menu) return;
+      const willOpen = menu.classList.contains('hidden');
+      root.querySelector('.year-cal-create-menu')?.classList.add('hidden');
+      root.querySelector('.btn-year-cal-create')?.setAttribute('aria-expanded', 'false');
+      menu.classList.toggle('hidden', !willOpen);
+      btn?.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    });
+
+    root.querySelectorAll('.year-cal-theme-option').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.calendarTheme;
+        root.querySelector('.year-cal-theme-menu')?.classList.add('hidden');
+        root.querySelector('.btn-year-cal-theme')?.setAttribute('aria-expanded', 'false');
+        if (!id || id === Store.getCalendarTheme()) return;
+        Store.setCalendarTheme(id);
+        this.render();
+      });
+    });
+
+    root.querySelector('.btn-year-cal-wash-toggle')?.addEventListener('click', () => {
+      const day = this.calendarViewDate || this.getCalendarViewState().viewDate;
+      if (!day) return;
+      Store.toggleCalendarWashDay(day);
+      this.render();
+    });
+
     root.querySelector('.btn-year-cal-prev')?.addEventListener('click', () => {
       setMonth((this.calendarMonth ?? 0) - 1);
     });
@@ -6654,6 +6864,8 @@ const App = {
       const btn = root.querySelector('.btn-year-cal-create');
       if (!menu) return;
       const willOpen = menu.classList.contains('hidden');
+      root.querySelector('.year-cal-theme-menu')?.classList.add('hidden');
+      root.querySelector('.btn-year-cal-theme')?.setAttribute('aria-expanded', 'false');
       menu.classList.toggle('hidden', !willOpen);
       btn?.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
     });
@@ -6675,9 +6887,9 @@ const App = {
     if (!this._yearCalCreateOutsideBound) {
       this._yearCalCreateOutsideBound = true;
       document.addEventListener('click', (e) => {
-        if (e.target.closest('.year-cal-create-wrap')) return;
-        document.querySelectorAll('.year-cal-create-menu').forEach((el) => el.classList.add('hidden'));
-        document.querySelectorAll('.btn-year-cal-create').forEach((el) => el.setAttribute('aria-expanded', 'false'));
+        if (e.target.closest('.year-cal-create-wrap') || e.target.closest('.year-cal-theme-wrap')) return;
+        document.querySelectorAll('.year-cal-create-menu, .year-cal-theme-menu').forEach((el) => el.classList.add('hidden'));
+        document.querySelectorAll('.btn-year-cal-create, .btn-year-cal-theme').forEach((el) => el.setAttribute('aria-expanded', 'false'));
       });
     }
 
@@ -7479,27 +7691,6 @@ const App = {
         } else {
           this.navigate('dept', { deptId: el.dataset.dept });
         }
-      });
-    });
-    document.querySelectorAll('.today-chip').forEach((el) => {
-      el.addEventListener('click', () => {
-        const mod = getModule(el.dataset.dept, el.dataset.module);
-        const dept = getDepartment(el.dataset.dept);
-        if (mod?.recordView === 'habitChecklist' || mod?.recordView === 'weekdayCheckin') {
-          if (dept?.layout === 'accordion') {
-            this.setDeptExpanded(el.dataset.dept, el.dataset.module, true);
-            this.navigate('dept', { deptId: el.dataset.dept });
-          } else {
-            this.navigate('module', { deptId: el.dataset.dept, moduleId: el.dataset.module });
-          }
-          return;
-        }
-        if (dept?.layout === 'pages') {
-          this.navigate('module', { deptId: el.dataset.dept, moduleId: el.dataset.module });
-        } else {
-          this.navigate('dept', { deptId: el.dataset.dept });
-        }
-        setTimeout(() => this.openModal(el.dataset.dept, el.dataset.module), 50);
       });
     });
   },

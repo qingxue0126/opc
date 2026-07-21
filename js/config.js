@@ -144,6 +144,18 @@ function baguBankSelectOptions() {
   return listBaguBanks().map((b) => ({ value: b.id, label: b.name }));
 }
 
+/** 年历视图模式：汇总 / 专项事项（非背景主题） */
+const CALENDAR_THEMES = [
+  { id: 'summary', name: '汇总', icon: '📋', desc: '查看全部事项' },
+  { id: 'study', name: '学习', icon: '📚', desc: '查看学习相关事项' },
+  { id: 'sleep', name: '睡眠', icon: '🌙', desc: '查看睡眠相关事项' },
+  { id: 'wash', name: '洗头', icon: '🧴', desc: '查看洗头记录' },
+];
+
+function getCalendarThemeMeta(themeId) {
+  return CALENDAR_THEMES.find((t) => t.id === themeId) || CALENDAR_THEMES[0];
+}
+
 const DEPARTMENTS = [
   {
     id: 'core',

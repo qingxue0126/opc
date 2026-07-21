@@ -2581,20 +2581,20 @@ body {
 .bagu-bank-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  grid-auto-rows: 112px;
+  grid-auto-rows: 100px;
   gap: 14px;
 }
 
 .bagu-bank-card {
   position: relative;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
   width: 100%;
   height: 100%;
   min-height: 0;
   box-sizing: border-box;
-  padding: 16px 52px 16px 16px;
+  padding: 14px 52px 12px 14px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -2703,9 +2703,19 @@ body {
   gap: 8px;
 }
 
-.bagu-bank-logo-actions .form-hint {
-  width: 100%;
-  margin: 0;
+.bagu-bank-delete-row {
+  margin-top: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.bagu-bank-delete-row .btn.is-danger {
+  color: #DC2626;
+}
+
+.bagu-bank-delete-row .btn.is-danger:hover {
+  background: #FEF2F2;
+  color: #B91C1C;
 }
 
 .btn-xs {
@@ -5170,6 +5180,284 @@ body {
   flex-wrap: wrap;
 }
 
+.year-cal-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.year-cal-theme-wrap {
+  position: relative;
+}
+
+.btn-year-cal-theme {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  color: #57534E;
+  background: #FAFAF9;
+  border: 1px solid var(--border);
+}
+
+.btn-year-cal-theme:hover,
+.btn-year-cal-theme[aria-expanded='true'] {
+  color: #0F766E;
+  border-color: #99F6E4;
+  background: #F0FDFA;
+}
+
+.year-cal-theme-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  min-width: 220px;
+  padding: 8px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.12);
+}
+
+.year-cal-theme-menu.hidden {
+  display: none;
+}
+
+.year-cal-theme-menu-title {
+  padding: 4px 8px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.year-cal-theme-option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.year-cal-theme-option:hover {
+  background: #F5F5F4;
+}
+
+.year-cal-theme-option.is-active {
+  background: #F0FDFA;
+}
+
+.year-cal-theme-option-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #F5F5F4;
+  flex-shrink: 0;
+}
+
+.year-cal-theme-option-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.year-cal-theme-option-text strong {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.year-cal-theme-option-text small {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.year-cal-theme-option-check {
+  color: #0F766E;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.year-cal-theme-mark {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.year-cal-theme-mark.is-study {
+  background: #EEF2FF;
+  color: #4338CA;
+}
+
+.year-cal-theme-mark.is-wash {
+  background: #CFFAFE;
+  color: #0E7490;
+  font-size: 10px;
+}
+
+.year-cal-day.has-theme-mark {
+  position: relative;
+}
+
+.year-cal-week.is-sleep-view {
+  position: relative;
+  overflow: visible;
+}
+
+.year-cal-week.is-sleep-view .year-cal-day {
+  z-index: 1;
+  padding-bottom: 6px;
+  overflow: visible;
+}
+
+.year-cal-sleep-dur {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 3px;
+  padding: 0 2px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 800;
+  color: #111827;
+  line-height: 1.15;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.year-cal-sleep-bed {
+  position: absolute;
+  left: 50%;
+  transform: translate(-50%, calc(-100% - 6px));
+  white-space: nowrap;
+  font-size: 9px;
+  font-weight: 600;
+  color: #6366F1;
+  line-height: 1;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.year-cal-sleep-dot {
+  position: absolute;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background: #4F46E5;
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 0 1px rgba(79, 70, 229, 0.35);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.year-cal-day.is-sleep-day {
+  overflow: visible;
+  background: var(--sleep-fill, rgba(99, 102, 241, 0.14));
+}
+
+.year-cal-day.is-sleep-day.is-outside,
+.year-cal-day.is-sleep-day:hover:not(:disabled),
+.year-cal-day.is-sleep-day.is-selected,
+.year-cal-day.is-sleep-day.is-selected:hover:not(:disabled) {
+  background: var(--sleep-fill, rgba(99, 102, 241, 0.14));
+}
+
+.year-cal-day.is-sleep-day:hover:not(:disabled),
+.year-cal-day.is-sleep-day.is-selected,
+.year-cal-day.is-sleep-day.is-selected:hover:not(:disabled) {
+  border-color: #A5B4FC;
+}
+
+.year-cal-sleep-svg {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+  overflow: visible;
+}
+
+.year-cal-sleep-polyline {
+  stroke: #6366F1;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.year-cal-sleep-record-list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.year-cal-sleep-record {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #EEF2FF;
+  border: 1px solid #E0E7FF;
+  font-size: 12px;
+}
+
+.year-cal-sleep-record .k {
+  font-weight: 700;
+  color: #4338CA;
+}
+
+.year-cal-sleep-record .v {
+  color: #475569;
+}
+
+.year-cal-theme-day-action,
+.year-cal-theme-day-hint {
+  margin: 0 0 10px;
+}
+
+.year-cal-theme-day-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #FAFAF9;
+  border: 1px dashed var(--border);
+}
+
+.year-cal-theme-day-action .btn {
+  width: 100%;
+}
+
 .year-cal-year-switch {
   display: flex;
   align-items: center;
@@ -5387,7 +5675,7 @@ body {
 
 .year-cal-day {
   appearance: none;
-  border: 1px solid transparent;
+  border: 1px solid #E5E7EB;
   background: #fff;
   border-radius: 8px;
   min-height: 76px;
