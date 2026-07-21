@@ -6551,9 +6551,34 @@ body {
 }
 
 .sleep-toolbar.accordion-toolbar-icons {
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 12px;
+}
+
+.sleep-toolbar-range {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  justify-self: center;
+}
+
+.sleep-toolbar-range.is-empty {
+  min-height: 1px;
+}
+
+.sleep-toolbar .sleep-chart-range {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.sleep-toolbar .toolbar-actions {
+  justify-self: end;
 }
 
 .sleep-view-tabs {
@@ -6562,6 +6587,7 @@ body {
   padding: 4px;
   background: var(--bg);
   border-radius: 10px;
+  justify-self: start;
 }
 
 .sleep-view-tab {
@@ -6587,8 +6613,13 @@ body {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 14px 16px 12px;
+  padding: 8px 12px 6px;
   box-shadow: var(--shadow);
+  height: auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .sleep-chart-head {
@@ -6596,7 +6627,8 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
+  flex-shrink: 0;
 }
 
 .sleep-chart-range {
@@ -6605,17 +6637,48 @@ body {
   color: var(--text);
 }
 
+.sleep-chart-main {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
 .sleep-chart-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 10px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   font-size: 12px;
   color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.sleep-chart-legend-side {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 0;
+  padding: 4px 2px 4px 0;
+  min-width: 72px;
 }
 
 .sleep-chart-legend-toggle {
   gap: 6px;
+}
+
+.sleep-chart-legend-side.sleep-chart-legend-toggle {
+  gap: 8px;
+}
+
+.sleep-chart-legend-side .sleep-legend-btn {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 6px 8px;
 }
 
 .sleep-legend-item {
@@ -6685,13 +6748,16 @@ body {
 .sleep-chart-wrap {
   width: 100%;
   overflow-x: auto;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .sleep-chart-svg {
   display: block;
   width: 100%;
   min-width: 520px;
-  height: auto;
+  height: 280px;
+  max-height: 280px;
 }
 
 .sleep-chart-grid {
@@ -6786,6 +6852,32 @@ body {
   text-align: center;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+/* 睡眠模块内容区：随内容收紧，日视图过长时可滚 */
+.sleep-module-body {
+  height: auto;
+  max-height: 320px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.sleep-module-body:has(.sleep-chart-panel) {
+  max-height: none;
+  overflow: visible;
+}
+
+.sleep-module-body .sleep-day-list {
+  margin: 0;
+}
+
+.sleep-module-body .empty-state {
+  margin: 0;
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* 日视图记录行（对齐网格，收窄前列宽） */

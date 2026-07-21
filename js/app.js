@@ -2069,6 +2069,21 @@ const App = {
 
   renderSleepToolbar(dept) {
     const mode = this.sleepViewMode || 'day';
+    const anchor = this.getSleepViewAnchor();
+    const rangeCenter =
+      mode === 'week'
+        ? `<div class="sleep-toolbar-range">
+            <button type="button" class="btn btn-ghost btn-sm btn-sleep-prev" title="上一周">‹</button>
+            <span class="sleep-chart-range">本周 ${this.formatSleepRangeLabel('week', anchor)}</span>
+            <button type="button" class="btn btn-ghost btn-sm btn-sleep-next" title="下一周">›</button>
+          </div>`
+        : mode === 'month'
+          ? `<div class="sleep-toolbar-range">
+              <button type="button" class="btn btn-ghost btn-sm btn-sleep-prev" title="上一月">‹</button>
+              <span class="sleep-chart-range">${this.formatSleepRangeLabel('month', anchor)}</span>
+              <button type="button" class="btn btn-ghost btn-sm btn-sleep-next" title="下一月">›</button>
+            </div>`
+          : `<div class="sleep-toolbar-range is-empty" aria-hidden="true"></div>`;
     return `
       <div class="accordion-toolbar accordion-toolbar-icons sleep-toolbar">
         <div class="sleep-view-tabs" role="tablist">
@@ -2076,6 +2091,7 @@ const App = {
           <button type="button" class="sleep-view-tab ${mode === 'week' ? 'is-active' : ''}" data-sleep-view="week">周</button>
           <button type="button" class="sleep-view-tab ${mode === 'month' ? 'is-active' : ''}" data-sleep-view="month">月</button>
         </div>
+        ${rangeCenter}
         <div class="toolbar-actions">
           <button type="button" class="icon-btn btn-add-record" title="新增记录"
             data-dept="${dept.id}" data-module="sleep">+</button>
@@ -2364,8 +2380,8 @@ const App = {
     const rangeSpan = Math.max(60, rangeEnd - rangeStart);
 
     const W = 720;
-    const H = 360;
-    const pad = { top: 36, right: 16, bottom: 44, left: 72 };
+    const H = 320;
+    const pad = { top: 28, right: 16, bottom: 36, left: 68 };
     const plotW = W - pad.left - pad.right;
     const plotH = H - pad.top - pad.bottom;
     const colW = plotW / 7;
@@ -2483,23 +2499,20 @@ const App = {
 
     return `
       <div class="sleep-chart-panel">
-        <div class="sleep-chart-head">
-          <button type="button" class="btn btn-ghost btn-sm btn-sleep-prev" title="上一周">‹</button>
-          <span class="sleep-chart-range">本周 ${this.formatSleepRangeLabel('week', anchor)}</span>
-          <button type="button" class="btn btn-ghost btn-sm btn-sleep-next" title="下一周">›</button>
-        </div>
-        <div class="sleep-chart-legend">
-          <span class="sleep-legend-item"><i class="sleep-legend-swatch is-long"></i>长睡眠</span>
-          <span class="sleep-legend-item"><i class="sleep-legend-swatch is-nap"></i>小憩</span>
-        </div>
-        <div class="sleep-chart-wrap">
-          <svg class="sleep-chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="每周睡眠时间线">
-            ${gridLines}
-            ${noonLine}
-            ${bars}
-            ${xLabels}
-            <text class="sleep-chart-axis-title" x="${titleX}" y="${titleY}" text-anchor="middle" transform="rotate(-90 ${titleX} ${titleY})">时间线</text>
-          </svg>
+        <div class="sleep-chart-main">
+          <div class="sleep-chart-wrap">
+            <svg class="sleep-chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="每周睡眠时间线">
+              ${gridLines}
+              ${noonLine}
+              ${bars}
+              ${xLabels}
+              <text class="sleep-chart-axis-title" x="${titleX}" y="${titleY}" text-anchor="middle" transform="rotate(-90 ${titleX} ${titleY})">时间线</text>
+            </svg>
+          </div>
+          <div class="sleep-chart-legend sleep-chart-legend-side">
+            <span class="sleep-legend-item"><i class="sleep-legend-swatch is-long"></i>长睡眠</span>
+            <span class="sleep-legend-item"><i class="sleep-legend-swatch is-nap"></i>小憩</span>
+          </div>
         </div>
         ${hasData ? '' : '<p class="sleep-chart-empty">本周暂无睡眠记录</p>'}
       </div>`;
@@ -2617,10 +2630,10 @@ const App = {
     const metricMins = (s) =>
       metric === 'long' ? s.longMins : metric === 'nap' ? s.napMins : s.totalMins;
 
-    // 保持 W=720，不收窄模块
+    // 保持 W=720，不收窄模块；高度与周视图对齐
     const W = 720;
     const H = 320;
-    const pad = { top: 36, right: 16, bottom: 36, left: 72 };
+    const pad = { top: 28, right: 16, bottom: 32, left: 68 };
     const plotW = W - pad.left - pad.right;
     const plotH = H - pad.top - pad.bottom;
     const maxHours = Math.max(10, ...dayStats.map(metricHours), 1);
@@ -2701,23 +2714,20 @@ const App = {
 
     return `
       <div class="sleep-chart-panel">
-        <div class="sleep-chart-head">
-          <button type="button" class="btn btn-ghost btn-sm btn-sleep-prev" title="上一月">‹</button>
-          <span class="sleep-chart-range">${this.formatSleepRangeLabel('month', anchor)}</span>
-          <button type="button" class="btn btn-ghost btn-sm btn-sleep-next" title="下一月">›</button>
-        </div>
-        <div class="sleep-chart-legend sleep-chart-legend-toggle" role="tablist">
-          ${legendBtn('long', 'is-long', '长睡眠')}
-          ${legendBtn('nap', 'is-nap', '小憩')}
-          ${legendBtn('total', 'is-total', '总时长')}
-        </div>
-        <div class="sleep-chart-wrap">
-          <svg class="sleep-chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="每月睡眠趋势">
-            ${hourGrid}
-            ${bars}
-            ${xLabels}
-            <text class="sleep-chart-axis-title" x="${titleX}" y="${titleY}" text-anchor="middle" transform="rotate(-90 ${titleX} ${titleY})">时长</text>
-          </svg>
+        <div class="sleep-chart-main">
+          <div class="sleep-chart-wrap">
+            <svg class="sleep-chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="每月睡眠趋势">
+              ${hourGrid}
+              ${bars}
+              ${xLabels}
+              <text class="sleep-chart-axis-title" x="${titleX}" y="${titleY}" text-anchor="middle" transform="rotate(-90 ${titleX} ${titleY})">时长</text>
+            </svg>
+          </div>
+          <div class="sleep-chart-legend sleep-chart-legend-side sleep-chart-legend-toggle" role="tablist">
+            ${legendBtn('long', 'is-long', '长睡眠')}
+            ${legendBtn('nap', 'is-nap', '小憩')}
+            ${legendBtn('total', 'is-total', '总时长')}
+          </div>
         </div>
         ${dayStats.some((s) => s.count) ? '' : '<p class="sleep-chart-empty">本月暂无睡眠记录</p>'}
       </div>`;
