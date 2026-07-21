@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OPC · 个人公司操作系统</title>
+  <link rel="stylesheet" href="css/landing.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="site-logo" href="/">OPC</a>
+      <nav class="site-nav">
+        <a href="#features">功能</a>
+        <a href="#departments">四大部门</a>
+      </nav>
+      <div class="site-actions" id="siteActions">
+        <button type="button" class="btn btn-ghost" id="btnOpenLogin">登录</button>
+        <button type="button" class="btn btn-primary" id="btnOpenRegister">注册</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-inner">
+        <p class="hero-badge">Personal Company OS</p>
+        <h1>把人生当成一家公司来经营</h1>
+        <p class="hero-desc">
+          OPC 帮你用「找工作、生活、副业、体验」四大部门管理目标与日常记录，
+          配合 AI 小助手，把习惯、面试、作息和 Side Project 都收进一个仪表盘。
+        </p>
+        <div class="hero-actions">
+          <button type="button" class="btn btn-primary btn-lg" id="btnHeroStart">免费开始使用</button>
+          <a class="btn btn-ghost btn-lg" href="#features">了解功能</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="features" id="features">
+      <h2>一个系统，管好你的个人公司</h2>
+      <div class="feature-grid">
+        <article class="feature-card">
+          <span class="feature-icon">🎯</span>
+          <h3>北极星目标</h3>
+          <p>置顶展示最重要目标与倒计时，求职冲刺期一眼看到 deadline。</p>
+        </article>
+        <article class="feature-card">
+          <span class="feature-icon">🤖</span>
+          <h3>AI 小助手</h3>
+          <p>用自然语言添加习惯、修改目标，聊天式管理你的打卡卡片。</p>
+        </article>
+        <article class="feature-card">
+          <span class="feature-icon">📋</span>
+          <h3>模块化记录</h3>
+          <p>学习、简历、投递、面试、睡眠、运动……每个模块独立记录与排序。</p>
+        </article>
+        <article class="feature-card">
+          <span class="feature-icon">☁️</span>
+          <h3>账号云端同步</h3>
+          <p>注册登录后数据保存在服务端，换浏览器也能继续用。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="departments" id="departments">
+      <h2>四大部门</h2>
+      <div class="dept-showcase">
+        <div class="dept-showcase-item"><strong>01 找工作</strong><span>八股 · 手撕 · 项目 · 简历 · 投递 · 面试</span></div>
+        <div class="dept-showcase-item"><strong>02 生活</strong><span>早晨启动 · 睡眠 · 运动 · 护肤</span></div>
+        <div class="dept-showcase-item"><strong>03 副业</strong><span>小红书 · 写小说</span></div>
+        <div class="dept-showcase-item"><strong>04 体验</strong><span>外出游玩 · 休息充电</span></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>OPC · 个人公司操作系统</p>
+  </footer>
+
+  <div class="auth-overlay hidden" id="authOverlay">
+    <div class="auth-modal">
+      <button type="button" class="auth-close" id="authClose">×</button>
+      <div class="auth-tabs">
+        <button type="button" class="auth-tab active" data-tab="login">登录</button>
+        <button type="button" class="auth-tab" data-tab="register">注册</button>
+      </div>
+      <form id="authForm">
+        <div class="form-group">
+          <label for="authUsername">用户名</label>
+          <input type="text" id="authUsername" maxlength="20" required autocomplete="username">
+        </div>
+        <div class="form-group">
+          <label for="authPassword">密码</label>
+          <input type="password" id="authPassword" minlength="6" required autocomplete="current-password">
+        </div>
+        <p class="auth-error hidden" id="authError"></p>
+        <button type="submit" class="btn btn-primary btn-block" id="authSubmit">登录</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="js/landing.js"></script>
+</body>
+</html>

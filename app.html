@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OPC · 个人公司仪表盘</title>
+  <link href="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.snow.css" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css?v=20260721ap">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand" id="userProfile">
+        <button type="button" class="profile-btn" id="btnProfile" title="编辑个人资料">
+          <span class="profile-avatar" id="profileAvatar">
+            <img id="profileAvatarImg" class="profile-avatar-img hidden" alt="">
+            <span class="profile-avatar-fallback" id="profileAvatarFallback">◉</span>
+          </span>
+          <div class="profile-info">
+            <h1 id="profileName">CEO</h1>
+            <div class="profile-signature">
+              <p id="profileSignatureText">个人公司</p>
+            </div>
+          </div>
+        </button>
+      </div>
+      <nav class="nav" id="nav"></nav>
+      <div class="sidebar-footer">
+        <button class="btn btn-ghost btn-sm" id="btnRecycleBin">回收箱</button>
+        <button class="btn btn-ghost btn-sm" id="btnSettings">LLM 设置</button>
+        <button class="btn btn-ghost btn-sm" id="btnExport">导出数据</button>
+        <button class="btn btn-ghost btn-sm" id="btnImport">导入数据</button>
+        <button class="btn btn-ghost btn-sm" id="btnLogout">退出登录</button>
+        <input type="file" id="importFile" accept=".json" hidden>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="page-header" id="pageHeader">
+        <div class="page-header-bg" id="pageHeaderBg" aria-hidden="true"></div>
+        <div class="page-header-content">
+          <header class="topbar">
+            <div>
+              <p class="topbar-date" id="todayDate"></p>
+              <h2 class="topbar-title" id="pageTitle">总览</h2>
+              <p class="dept-header-desc hidden" id="deptHeaderDesc"></p>
+            </div>
+            <div class="topbar-right">
+              <div class="topbar-widget-wrap hidden" id="nextInterviewWidgetWrap">
+                <div class="topbar-widget topbar-widget-interview" id="nextInterviewWidget">
+                  <span class="topbar-widget-label">最近面试</span>
+                  <span class="topbar-widget-text" id="nextInterviewTitle"></span>
+                  <span class="topbar-widget-countdown" id="nextInterviewCountdown"></span>
+                  <span class="topbar-widget-meta" id="nextInterviewMeta"></span>
+                </div>
+                <button type="button" class="btn-edit-topbar-widget" data-widget="interview" title="编辑颜色">✎</button>
+              </div>
+              <div class="topbar-widget-wrap hidden" id="northStarWrap">
+                <div class="topbar-widget topbar-widget-star" id="northStar">
+                  <span class="topbar-widget-label">北极星</span>
+                  <span class="topbar-widget-text">8 月上旬接到 offer</span>
+                  <span class="topbar-widget-countdown" id="northStarCountdown"></span>
+                  <span class="topbar-widget-meta topbar-widget-meta-spacer" aria-hidden="true"></span>
+                </div>
+                <button type="button" class="btn-edit-topbar-widget" data-widget="northStar" title="编辑颜色">✎</button>
+              </div>
+            </div>
+          </header>
+        </div>
+        <div class="header-bg-actions hidden" id="headerBgActions">
+          <button type="button" class="btn-header-bg" id="btnHeaderBgUpload" title="上传背景图">🖼</button>
+          <button type="button" class="btn-header-bg btn-header-bg-remove hidden" id="btnHeaderBgRemove" title="移除背景">×</button>
+        </div>
+        <input type="file" id="headerBgFileInput" accept="image/*" hidden>
+      </div>
+
+      <div class="content" id="content"></div>
+    </main>
+  </div>
+
+  <div class="modal-overlay hidden" id="modalOverlay">
+    <div class="modal" id="modal">
+      <div class="modal-header">
+        <h3 id="modalTitle">记录</h3>
+        <button class="modal-close" id="modalClose">×</button>
+      </div>
+      <form class="modal-body" id="recordForm"></form>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" id="modalCancel">取消</button>
+        <button type="button" class="btn btn-primary hidden" id="btnBaguAnswerEdit">编辑</button>
+        <button type="submit" form="recordForm" class="btn btn-primary" id="modalSave">保存</button>
+      </div>
+    </div>
+  </div>
+
+
+  <div class="confirm-overlay hidden" id="confirmOverlay" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <div class="confirm-dialog">
+      <h3 id="confirmTitle">确认删除</h3>
+      <p id="confirmMessage">确定删除吗？删除后将移入回收箱，满 30 天后自动清除。</p>
+      <div class="confirm-actions">
+        <button type="button" class="btn btn-ghost" id="confirmCancel">取消</button>
+        <button type="button" class="btn btn-danger" id="confirmOk">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.min.js"></script>
+  <script src="js/config.js?v=20260721ap"></script>
+  <script src="js/store.js?v=20260721ap"></script>
+  <script src="js/rich-editor.js?v=20260721ap"></script>
+  <script src="js/nlp.js?v=20260721ap"></script>
+  <script src="js/app.js?v=20260721ap"></script>
+</body>
+</html>
