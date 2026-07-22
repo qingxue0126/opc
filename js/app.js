@@ -10,9 +10,24 @@ const App = {
   sleepMonthMetric: 'total', // total | long | nap
   studyViewMode: 'day', // day | week | month
   studyViewAnchor: null, // YYYY-MM-DD
+  planScope: 'daily', // 左栏计划：daily | weekly | monthly
+  planStatsScope: 'weekly', // 右栏统计：daily | weekly | monthly
+  planStatsAnchor: null, // 统计锚点 YYYY-MM-DD
+  planListAnchor: null, // To do / Done / 时间线锚点 YYYY-MM-DD
+  planSheetColumn: null, // null | 'plan' | 'done' | 'timeline'
+  planSheetKey: null,
+  planSheetPriority: 'none', // none | high | medium | low
+  planSheetParentId: null, // 变为子待办时选中的父待办
+  planSheetEditId: null, // 编辑中的待办 id
+  planSheetOriginKey: null, // 编辑开始时的日期/周/月 key
+  planEditingId: null,
   calendarYear: null,
   calendarMonth: null,
   calendarViewDate: null,
+  calendarFocusTaskId: null,
+  navExpanded: null, // Set<deptId> 侧栏展开的部门
+  checkinWeekByModule: null, // { 'living.facemask': '2026-W30' }
+  _scrollToAccordionModule: null,
 
   init() {
     Store.getRecycleBin();
@@ -60,6 +75,14 @@ const App = {
 
   navigate(view, params = {}) {
     this.route = { view, ...params };
+    if (
+      (view === 'dept' || view === 'module') &&
+      this.route.deptId &&
+      this.isNavExpandable(this.route.deptId)
+    ) {
+      this.navExpanded = this.navExpanded || new Set();
+      this.navExpanded.add(this.route.deptId);
+    }
     this.renderNav();
     this.render();
   },
@@ -195,68 +218,188 @@ const App = {
     });
   },
 
+  ensureNavExpanded() {
+    this.navExpanded = this.navExpanded || new Set();
+  },
+
+  isNavDeptExpanded(deptId) {
+    this.navExpanded = this.navExpanded || new Set();
+    return this.navExpanded.has(deptId);
+  },
+
+  toggleNavDept(deptId) {
+    this.navExpanded = this.navExpanded || new Set();
+    if (this.navExpanded.has(deptId)) this.navExpanded.delete(deptId);
+    else this.navExpanded.add(deptId);
+  },
+
+  navigateToDept(deptId) {
+    const dept = getDepartment(deptId);
+    if (!dept) return;
+    this.navExpanded = this.navExpanded || new Set();
+    this.navExpanded.add(deptId);
+    this.navFocusModule = null;
+    if (dept.layout === 'pages' && dept.modules[0]) {
+      this.navigate('module', { deptId: dept.id, moduleId: dept.modules[0].id });
+      return;
+    }
+    if (dept.sections?.length) {
+      this.navigate('dept', { deptId: dept.id, sectionId: dept.sections[0].id });
+      return;
+    }
+    this.navigate('dept', { deptId: dept.id });
+  },
+
+  navigateToSection(deptId, sectionId) {
+    const section = getDeptSection(deptId, sectionId);
+    if (!section) {
+      this.navigateToDept(deptId);
+      return;
+    }
+    this.navExpanded = this.navExpanded || new Set();
+    this.navExpanded.add(deptId);
+    this.navFocusModule = null;
+    this.navigate('dept', { deptId, sectionId: section.id });
+  },
+
+  navigateToModule(deptId, moduleId) {
+    const dept = getDepartment(deptId);
+    if (!dept) return;
+    this.navExpanded = this.navExpanded || new Set();
+    this.navExpanded.add(deptId);
+    this.navFocusModule = { deptId, moduleId };
+    const mod = getModule(deptId, moduleId);
+    const sectionId = mod?.sectionId || null;
+    if (dept.layout === 'accordion') {
+      this.setDeptExpanded(deptId, moduleId, true);
+      this._scrollToAccordionModule = moduleId;
+      this.navigate('dept', { deptId, ...(sectionId ? { sectionId } : {}) });
+      return;
+    }
+    this.navigate('module', { deptId, moduleId });
+  },
+
+  isNavExpandable(deptId) {
+    const dept = getDepartment(deptId);
+    return dept?.layout === 'pages' || Boolean(dept?.sections?.length);
+  },
+
   renderNav() {
     const nav = document.getElementById('nav');
-    const items = [
-      { view: 'home', label: '总览', color: '#4F46E5' },
-      ...DEPARTMENTS.map((d) => {
-        const dept = getDeptBase(d.id);
-        return {
-          view: 'dept',
-          deptId: d.id,
-          label: `${dept.order} ${dept.name}`,
-          color: dept.color,
-        };
-      }),
+    this.ensureNavExpanded();
+
+    const homeActive = this.route.view === 'home';
+    const parts = [
+      `<button class="nav-item ${homeActive ? 'active' : ''}" data-view="home">
+        <span class="nav-label">总览</span>
+      </button>`,
     ];
 
-    nav.innerHTML = items
-      .map((item) => {
-        const active =
-          (item.view === 'home' && this.route.view === 'home') ||
-          (item.view === 'dept' &&
-            ((this.route.view === 'dept' && this.route.deptId === item.deptId) ||
-              (this.route.view === 'module' && this.route.deptId === item.deptId)));
+    DEPARTMENTS.forEach((d) => {
+      const dept = getDepartment(d.id);
+      if (!dept) return;
+      const expandable = this.isNavExpandable(dept.id);
+      const onDept =
+        (this.route.view === 'dept' || this.route.view === 'module') &&
+        this.route.deptId === dept.id;
+      const expanded = expandable && this.isNavDeptExpanded(dept.id);
+      const hasSections = Boolean(dept.sections?.length);
+      const deptActive = expandable
+        ? onDept && this.route.view === 'dept' && !hasSections && !this.route.sectionId
+        : onDept;
 
-        if (item.view === 'home') {
-          return `
-            <button class="nav-item ${active ? 'active' : ''}"
-              data-view="${item.view}">
-              <span class="nav-dot" style="background:${item.color}"></span>
-              <span class="nav-label">${item.label}</span>
-            </button>`;
+      let subHtml = '';
+      if (expandable) {
+        if (hasSections) {
+          const subItems = dept.sections
+            .map((sec) => {
+              const subActive = onDept && this.route.sectionId === sec.id;
+              return `
+              <button type="button" class="nav-sub-item ${subActive ? 'active' : ''}"
+                data-dept="${dept.id}" data-section="${sec.id}">
+                <span class="nav-sub-label">${this.escapeHtml(sec.name)}</span>
+              </button>`;
+            })
+            .join('');
+          subHtml = `<div class="nav-sub${expanded ? '' : ' is-collapsed'}">${subItems}</div>`;
+        } else {
+          const subItems = (dept.modules || [])
+            .map((m) => {
+              const mod = getModule(dept.id, m.id);
+              if (!mod) return '';
+              const subActive =
+                this.route.view === 'module' &&
+                this.route.deptId === dept.id &&
+                this.route.moduleId === mod.id;
+              return `
+              <button type="button" class="nav-sub-item ${subActive ? 'active' : ''}"
+                data-dept="${dept.id}" data-module="${mod.id}">
+                <span class="nav-sub-label">${this.escapeHtml(mod.name)}</span>
+              </button>`;
+            })
+            .join('');
+          subHtml = `<div class="nav-sub${expanded ? '' : ' is-collapsed'}">${subItems}</div>`;
         }
+      }
 
-        return `
-          <div class="nav-item-row ${active ? 'active' : ''}">
-            <button class="nav-item" data-view="${item.view}" data-dept="${item.deptId}">
-              <span class="nav-dot" style="background:${item.color}"></span>
-              <span class="nav-label">${this.escapeHtml(item.label)}</span>
-            </button>
-            <button type="button" class="nav-edit-dept" title="编辑部门" data-dept="${item.deptId}">✎</button>
-          </div>`;
-      })
-      .join('');
+      const chevron = expandable
+        ? `<span class="nav-chevron" aria-hidden="true">
+              <svg viewBox="0 0 12 12" width="12" height="12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M2.5 7.5L6 4l3.5 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </span>`
+        : '';
 
-    nav.querySelectorAll('.nav-item').forEach((btn) => {
+      parts.push(`
+        <div class="nav-group ${expanded ? 'is-expanded' : ''} ${onDept ? 'is-current' : ''}${expandable ? ' is-expandable' : ''}" data-dept="${dept.id}">
+          <button type="button" class="nav-item nav-dept ${deptActive ? 'active' : ''}" data-dept="${dept.id}"${expandable ? ` aria-expanded="${expanded ? 'true' : 'false'}"` : ''}>
+            <span class="nav-label">${this.escapeHtml(dept.name)}</span>
+            ${chevron}
+          </button>
+          ${subHtml}
+        </div>`);
+    });
+
+    nav.innerHTML = parts.join('');
+
+    nav.querySelector('[data-view="home"]')?.addEventListener('click', () => {
+      this.navFocusModule = null;
+      this.navigate('home');
+    });
+
+    nav.querySelectorAll('.nav-dept').forEach((btn) => {
       btn.addEventListener('click', () => {
-        const view = btn.dataset.view;
-        if (view === 'home') this.navigate('home');
-        else {
-          const dept = getDepartment(btn.dataset.dept);
-          if (dept?.layout === 'pages' && dept.modules[0]) {
-            this.navigate('module', { deptId: dept.id, moduleId: dept.modules[0].id });
-          } else {
-            this.navigate('dept', { deptId: btn.dataset.dept });
-          }
+        const deptId = btn.dataset.dept;
+        if (!this.isNavExpandable(deptId)) {
+          this.navigateToDept(deptId);
+          return;
         }
+        if (this.isNavDeptExpanded(deptId)) {
+          this.toggleNavDept(deptId);
+          this.renderNav();
+          return;
+        }
+        const onDept =
+          (this.route.view === 'dept' || this.route.view === 'module') &&
+          this.route.deptId === deptId;
+        if (onDept) {
+          this.navExpanded.add(deptId);
+          this.renderNav();
+          return;
+        }
+        this.navigateToDept(deptId);
       });
     });
 
-    nav.querySelectorAll('.nav-edit-dept').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.openDeptEditModal(btn.dataset.dept);
+    nav.querySelectorAll('.nav-sub-item[data-module]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.navigateToModule(btn.dataset.dept, btn.dataset.module);
+      });
+    });
+
+    nav.querySelectorAll('.nav-sub-item[data-section]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.navigateToSection(btn.dataset.dept, btn.dataset.section);
       });
     });
   },
@@ -294,8 +437,9 @@ const App = {
           if (this.route.deptId === 'core') this.setupInterviewCountdown();
           break;
         }
-        title.textContent = dept?.name || '部门';
-        content.innerHTML = this.renderDept(this.route.deptId);
+        const section = getDeptSection(this.route.deptId, this.route.sectionId);
+        title.textContent = section?.name || dept?.name || '部门';
+        content.innerHTML = this.renderDept(this.route.deptId, this.route.sectionId);
         this.bindDept(this.route.deptId);
         this.updateInterviewWidget(this.route.deptId === 'core');
         if (this.route.deptId === 'core') this.setupInterviewCountdown();
@@ -318,6 +462,11 @@ const App = {
       }
     }
     this.updatePageHeader();
+    const onCore =
+      this.route.deptId === 'core' &&
+      (this.route.view === 'module' || this.route.view === 'dept');
+    content.classList.toggle('core-workspace', onCore);
+    document.querySelector('.main')?.classList.toggle('main--core', onCore);
   },
 
   updatePageHeader() {
@@ -327,9 +476,13 @@ const App = {
 
     if (this.route.view === 'dept') {
       const dept = getDepartment(this.route.deptId);
+      const section = getDeptSection(this.route.deptId, this.route.sectionId);
       main.classList.add('main--sticky-header');
-      descEl.textContent = dept?.desc || '';
-      descEl.classList.toggle('hidden', !dept?.desc);
+      const desc = section && dept?.sections?.length
+        ? dept.desc || ''
+        : dept?.desc || '';
+      descEl.textContent = desc;
+      descEl.classList.toggle('hidden', !desc);
     } else if (this.route.view === 'module') {
       const dept = getDepartment(this.route.deptId);
       if (dept?.layout === 'pages') {
@@ -509,84 +662,747 @@ const App = {
         ${this.renderChatPanel()}
       </div>
 
-      <div class="plan-grid">
-        ${this.renderPlanPanel('daily')}
-        ${this.renderPlanPanel('weekly')}
+      <div class="plan-module-wrap">
+        ${this.renderPlanModule()}
       </div>
 
       ${this.renderYearCalendar()}
-
-      <div class="section-title">快捷打卡</div>
-      <div class="card-grid" id="cardGrid">
-        ${this.renderCards()}
-      </div>
-
-      <div class="section-title" style="margin-top:28px">四大部门</div>
-      <div class="dept-grid">
-        ${DEPARTMENTS.map(
-          (d) => {
-            const dept = getDeptBase(d.id);
-            return `
-          <div class="dept-card" data-dept="${d.id}">
-            <div class="dept-card-header">
-              <span class="dept-badge" style="background:${dept.bg};color:${dept.color}">${dept.order}</span>
-              <h3>${this.escapeHtml(dept.name)}</h3>
-            </div>
-            <p>${this.escapeHtml(dept.desc)}</p>
-            <div class="module-tags">
-              ${d.modules.map((m) => {
-                const mod = getModule(d.id, m.id);
-                return `<span class="module-tag">${mod.icon} ${this.escapeHtml(mod.name)}</span>`;
-              }).join('')}
-            </div>
-          </div>`;
-          }
-        ).join('')}
-      </div>
     `;
   },
 
-  renderPlanPanel(type) {
-    const isDaily = type === 'daily';
-    const key = isDaily ? todayStr() : Store.weekKey();
-    const items = Store.getPlanItems(type, key).map((item) => Store.resolvePlanItem(item));
-    const doneCount = items.filter((i) => i.done).length;
-    const subtitle = isDaily
-      ? formatDate(key)
-      : `本周 ${Store.weekRangeLabel(key)}`;
-    const title = isDaily ? '每日计划' : '每周计划';
-    const placeholder = isDaily ? '添加今日待办，输入 @ 引用…' : '添加本周目标，输入 @ 引用…';
+  renderPlanModule() {
+    const planType =
+      this.planScope === 'weekly' || this.planScope === 'monthly' ? this.planScope : 'daily';
+    const listAnchor = this.getPlanListAnchor();
+    const timeline = Store.getPlanTimeline(planType, listAnchor);
+    const currentItems = (timeline.today.items || []).map((item) => Store.resolvePlanItem(item));
+    const todoToday = currentItems.filter((item) => !item.done);
+    const doneToday = currentItems.filter((item) => item.done);
+    const todoCount = todoToday.length;
+    const doneCount = doneToday.length;
+    const todoEmpty = '还没有待办';
+    const doneEmpty = '还没有完成项';
+    const listNav = this.renderPlanListNav(planType, listAnchor);
+
+    const renderBucket = (bucket, opts = {}) => {
+      const items = (bucket.items || []).map((item) =>
+        item && item.id && item.text !== undefined ? item : Store.resolvePlanItem(item)
+      );
+      if (!items.length && !opts.forceEmpty) return '';
+      return `
+        <div class="plan-bucket" data-plan-key="${this.escapeHtml(bucket.key)}">
+          ${
+            opts.hideLabel
+              ? ''
+              : `<div class="plan-bucket-label">${this.escapeHtml(bucket.label)}</div>`
+          }
+          <ul class="plan-list">
+            ${
+              items.length
+                ? items
+                    .map((item) =>
+                      this.renderPlanItem(item, {
+                        canNest: items.length > 1,
+                        editingId: this.planEditingId,
+                      })
+                    )
+                    .join('')
+                : `<li class="plan-empty">${opts.emptyText || '暂无待办'}</li>`
+            }
+          </ul>
+        </div>`;
+    };
+
+    const renderTodoBody = () => {
+      if (!todoToday.length) {
+        return `<div class="plan-bucket" data-plan-key="${this.escapeHtml(timeline.today.key)}">
+          <ul class="plan-list"><li class="plan-empty">${todoEmpty}</li></ul>
+        </div>`;
+      }
+      return renderBucket(
+        { key: timeline.today.key, label: '', items: todoToday },
+        { hideLabel: true }
+      );
+    };
+
+    const renderDoneBody = () => {
+      if (!doneToday.length) {
+        return `<div class="plan-bucket" data-plan-key="${this.escapeHtml(timeline.today.key)}">
+          <ul class="plan-list"><li class="plan-empty">${doneEmpty}</li></ul>
+        </div>`;
+      }
+      return renderBucket(
+        { key: timeline.today.key, label: '', items: doneToday },
+        { hideLabel: true }
+      );
+    };
+
+    const moments = Store.getPlanMoments(planType, timeline.today.key);
+    const renderMomentBody = () => {
+      if (!moments.length) {
+        return `<ul class="plan-moment-list"><li class="plan-empty">还没有时间点记录</li></ul>`;
+      }
+      return `<ul class="plan-moment-list">${moments
+        .map(
+          (m) => `
+        <li class="plan-moment-item" data-moment-id="${this.escapeHtml(m.id)}">
+          <span class="plan-moment-time">${this.escapeHtml(m.time || '--:--')}</span>
+          <div class="plan-moment-main">
+            <span class="plan-moment-text">${this.escapeHtml(m.text)}</span>
+            ${m.note ? `<span class="plan-moment-note">${this.escapeHtml(m.note)}</span>` : ''}
+          </div>
+          <button type="button" class="icon-btn btn-plan-moment-del" title="删除">×</button>
+        </li>`
+        )
+        .join('')}</ul>`;
+    };
+
+    const scopeTabs = (active, attr) => `
+      <div class="plan-scope-tabs" role="tablist">
+        <button type="button" class="plan-scope-tab ${active === 'daily' ? 'is-active' : ''}" ${attr}="daily">日</button>
+        <button type="button" class="plan-scope-tab ${active === 'weekly' ? 'is-active' : ''}" ${attr}="weekly">周</button>
+        <button type="button" class="plan-scope-tab ${active === 'monthly' ? 'is-active' : ''}" ${attr}="monthly">月</button>
+      </div>`;
+
+    const sheetCol = this.planSheetColumn;
 
     return `
-      <section class="plan-panel" data-plan-type="${type}" data-plan-key="${key}">
-        <div class="plan-panel-head">
-          <div>
-            <h3 class="plan-panel-title">${title}</h3>
-            <p class="plan-panel-sub">${subtitle}${items.length ? ` · 完成 ${doneCount}/${items.length}` : ''}</p>
+      <div class="plan-module-grid">
+        <section class="plan-module" data-plan-column="plan" data-plan-type="${planType}">
+          <div class="plan-module-head">
+            <div>
+              <h3 class="plan-module-title">To do List</h3>
+              <p class="plan-module-sub">${todoCount ? `${todoCount} 项待完成` : '待完成'}</p>
+            </div>
+            ${scopeTabs(planType, 'data-plan-scope')}
           </div>
-        </div>
-        <div class="plan-add-row">
-          <div class="plan-input-wrap">
-            <input type="text" class="plan-input" maxlength="120" placeholder="${placeholder}" autocomplete="off">
-            <div class="plan-mention-menu hidden" role="listbox"></div>
+          ${listNav}
+          <div class="plan-timeline plan-todo-list">
+            ${renderTodoBody()}
           </div>
-          <button type="button" class="btn btn-primary btn-sm btn-plan-add">添加</button>
+          <button type="button" class="plan-fab btn-plan-fab" title="添加待办" aria-label="添加待办" data-plan-column="plan">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+              <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+            </svg>
+          </button>
+          ${sheetCol === 'plan' ? this.renderPlanSheet(planType) : ''}
+        </section>
+        <section class="plan-module plan-done-module" data-plan-column="done" data-plan-type="${planType}">
+          <div class="plan-module-head">
+            <div>
+              <h3 class="plan-module-title">Done List</h3>
+              <p class="plan-module-sub">${doneCount ? `已完成 ${doneCount}` : '已完成'}</p>
+            </div>
+            ${scopeTabs(planType, 'data-plan-scope')}
+          </div>
+          ${listNav}
+          <div class="plan-timeline plan-done-list">
+            ${renderDoneBody()}
+          </div>
+          <button type="button" class="plan-fab btn-plan-fab" title="添加已完成事项" aria-label="添加已完成事项" data-plan-column="done">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+              <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+            </svg>
+          </button>
+          ${sheetCol === 'done' ? this.renderPlanSheet(planType) : ''}
+        </section>
+        <section class="plan-module plan-timeline-module" data-plan-column="timeline" data-plan-type="${planType}">
+          <div class="plan-module-head">
+            <div>
+              <h3 class="plan-module-title">时间线</h3>
+              <p class="plan-module-sub">${moments.length ? `${moments.length} 个时间点` : '时间点记录'}</p>
+            </div>
+            ${scopeTabs(planType, 'data-plan-scope')}
+          </div>
+          ${listNav}
+          <div class="plan-timeline plan-timeline-body">
+            ${renderMomentBody()}
+          </div>
+          <button type="button" class="plan-fab btn-plan-fab" title="添加时间点" aria-label="添加时间点" data-plan-column="timeline">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+              <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+            </svg>
+          </button>
+          ${sheetCol === 'timeline' ? this.renderTimelineSheet(planType) : ''}
+        </section>
+        <section class="plan-module plan-stats-module" data-plan-column="stats">
+          <div class="plan-module-head">
+            <div>
+              <h3 class="plan-module-title">统计</h3>
+              <p class="plan-module-sub">完成情况一览</p>
+            </div>
+            ${scopeTabs(this.planStatsScope || 'weekly', 'data-plan-stats-scope')}
+          </div>
+          <div class="plan-stats-body">
+            ${this.renderPlanStatsBody()}
+          </div>
+        </section>
+      </div>`;
+  },
+
+  getPlanListAnchor() {
+    if (this.planListAnchor && /^\d{4}-\d{2}-\d{2}$/.test(this.planListAnchor)) {
+      return this.planListAnchor;
+    }
+    return todayStr();
+  },
+
+  getPlanListRangeLabel(planType, anchor = this.getPlanListAnchor()) {
+    if (planType === 'weekly') {
+      const wk = Store.weekKey(new Date(`${anchor}T00:00:00`));
+      const range = String(Store.weekRangeLabel(wk) || wk).replace(/\//g, '.');
+      return wk === Store.currentPlanKey('weekly') ? `${range}（本周）` : range;
+    }
+    if (planType === 'monthly') {
+      const mk = Store.monthKey(new Date(`${anchor}T00:00:00`));
+      const label = Store.monthLabel(mk);
+      return mk === Store.currentPlanKey('monthly') ? `${label}（本月）` : label;
+    }
+    const label = formatDate(anchor);
+    return anchor === todayStr() ? `${label}（今天）` : label;
+  },
+
+  shiftPlanListAnchor(delta) {
+    const mode =
+      this.planScope === 'weekly' || this.planScope === 'monthly' ? this.planScope : 'daily';
+    const anchor = this.getPlanListAnchor();
+    if (mode === 'daily') {
+      this.planListAnchor = Store.shiftPlanKey('daily', anchor, delta);
+    } else if (mode === 'monthly') {
+      const mk = Store.monthKey(new Date(`${anchor}T00:00:00`));
+      this.planListAnchor = `${Store.shiftPlanKey('monthly', mk, delta)}-01`;
+    } else {
+      const wk = Store.weekKey(new Date(`${anchor}T00:00:00`));
+      this.planListAnchor = Store.getPlanWeekTracker(Store.shiftPlanKey('weekly', wk, delta)).days[0];
+    }
+  },
+
+  renderPlanListNav(planType, anchor = this.getPlanListAnchor()) {
+    const range = this.getPlanListRangeLabel(planType, anchor);
+    const prevTitle = planType === 'monthly' ? '上一月' : planType === 'weekly' ? '上一周' : '前一天';
+    const nextTitle = planType === 'monthly' ? '下一月' : planType === 'weekly' ? '下一周' : '后一天';
+    return `
+      <div class="plan-stats-nav plan-list-nav" role="group" aria-label="切换时间">
+        <button type="button" class="plan-stats-chevron-btn btn-plan-list-prev" title="${prevTitle}" aria-label="${prevTitle}">${this.chevronIcon('prev')}</button>
+        <span class="plan-stats-range">${this.escapeHtml(range)}</span>
+        <button type="button" class="plan-stats-chevron-btn btn-plan-list-next" title="${nextTitle}" aria-label="${nextTitle}">${this.chevronIcon('next')}</button>
+      </div>`;
+  },
+
+  getPlanStatsAnchor() {
+    if (this.planStatsAnchor && /^\d{4}-\d{2}-\d{2}$/.test(this.planStatsAnchor)) {
+      return this.planStatsAnchor;
+    }
+    return todayStr();
+  },
+
+  renderPlanStatsBody() {
+    const mode = this.planStatsScope || 'weekly';
+    if (mode === 'daily') return this.renderPlanStatsDay();
+    if (mode === 'monthly') return this.renderPlanStatsMonth();
+    return this.renderPlanStatsWeek();
+  },
+
+  renderPlanStatsDay() {
+    const date = this.getPlanStatsAnchor();
+    const items = Store.getPlanItems('daily', date)
+      .map((item) => Store.resolvePlanItem(item))
+      .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+    const done = items.filter((i) => i.done).length;
+    const rangeLabel =
+      date === todayStr() ? `${formatDate(date)}（今天）` : formatDate(date);
+    return `
+      <div class="plan-stats-day">
+        <div class="plan-stats-nav">
+          <button type="button" class="plan-stats-chevron-btn btn-plan-stats-prev" title="前一天" aria-label="前一天">${this.chevronIcon('prev')}</button>
+          <span class="plan-stats-range">${this.escapeHtml(rangeLabel)}</span>
+          <button type="button" class="plan-stats-chevron-btn btn-plan-stats-next" title="后一天" aria-label="后一天">${this.chevronIcon('next')}</button>
         </div>
-        <ul class="plan-list">
+        <p class="plan-stats-summary">${items.length ? `完成 ${done}/${items.length}` : '这一天没有待办'}</p>
+        <ol class="plan-stats-timeline">
           ${
             items.length
               ? items
-                  .map((item) =>
-                    this.renderPlanItem(item, {
-                      canNest: items.length > 1,
-                      editingId: this.planEditingId,
-                    })
-                  )
+                  .map((item, i) => {
+                    const time = item.createdAt
+                      ? String(item.createdAt).slice(11, 16)
+                      : String(i + 1).padStart(2, '0');
+                    return `
+              <li class="plan-stats-tl-item ${item.done ? 'is-done' : ''}">
+                <span class="plan-stats-tl-time">${this.escapeHtml(time)}</span>
+                <span class="plan-stats-tl-dot"></span>
+                <span class="plan-stats-tl-text">${this.escapeHtml(item.text || '—')}</span>
+              </li>`;
+                  })
                   .join('')
-              : `<li class="plan-empty">${isDaily ? '今天还没有计划，写一条开始吧' : '本周还没有计划，写一条目标吧'}</li>`
+              : '<li class="plan-empty">暂无时间线数据</li>'
           }
-        </ul>
-      </section>`;
+        </ol>
+      </div>`;
+  },
+
+  renderPlanStatsWeek() {
+    const anchor = this.getPlanStatsAnchor();
+    const weekKey = Store.weekKey(new Date(`${anchor}T00:00:00`));
+    const tracker = Store.getPlanWeekTracker(weekKey);
+    const weekday = ['一', '二', '三', '四', '五', '六', '日'];
+    const range = String(tracker.rangeLabel || '').replace(/\//g, '.');
+    const rangeLabel =
+      weekKey === Store.currentPlanKey('weekly') ? `${range || weekKey}（本周）` : range || weekKey;
+    const head = `
+      <div class="plan-stats-nav">
+        <button type="button" class="plan-stats-chevron-btn btn-plan-stats-prev" title="上一周" aria-label="上一周">${this.chevronIcon('prev')}</button>
+        <span class="plan-stats-range">${this.escapeHtml(rangeLabel)}</span>
+        <button type="button" class="plan-stats-chevron-btn btn-plan-stats-next" title="下一周" aria-label="下一周">${this.chevronIcon('next')}</button>
+      </div>
+      <div class="plan-week-tracker-title">Weekly Tracker</div>`;
+    if (!tracker.rows.length) {
+      return `${head}<p class="plan-empty">本周还没有日待办打卡</p>`;
+    }
+    const headCells = tracker.days
+      .map(
+        (date, i) =>
+          `<th><span class="plan-week-day-chip">${weekday[i]}</span><span class="plan-week-day-num">${date.slice(8)}</span></th>`
+      )
+      .join('');
+    const body = tracker.rows
+      .map((row, ri) => {
+        const tone = ri % 2 === 0 ? 'is-cool' : 'is-warm';
+        const cells = tracker.days
+          .map((date) => {
+            const cell = row.cells[date];
+            // 有任务但未完成：格子留空；仅已完成显示圆点
+            if (!cell?.done) return '<td></td>';
+            return `<td><span class="plan-week-dot ${tone} is-done" title="已完成"></span></td>`;
+          })
+          .join('');
+        return `<tr><th scope="row">${this.escapeHtml(row.label)}</th>${cells}</tr>`;
+      })
+      .join('');
+    return `
+      <div class="plan-stats-week">
+        ${head}
+        <div class="plan-week-tracker-wrap">
+          <table class="plan-week-tracker">
+            <thead><tr><th></th>${headCells}</tr></thead>
+            <tbody>${body}</tbody>
+          </table>
+        </div>
+      </div>`;
+  },
+
+  planMonthMoodFace(kind) {
+    const faces = {
+      sad: `<svg viewBox="0 0 40 40" class="plan-month-face-svg" aria-hidden="true"><circle cx="20" cy="20" r="18" fill="currentColor"/><path d="M12 15c1.2-2 3-3 4.5-2.2M28 15c-1.2-2-3-3-4.5-2.2" stroke="#444" stroke-width="1.6" fill="none" stroke-linecap="round"/><path d="M14 27c2.5-2.5 9.5-2.5 12 0" stroke="#444" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>`,
+      meh: `<svg viewBox="0 0 40 40" class="plan-month-face-svg" aria-hidden="true"><circle cx="20" cy="20" r="18" fill="currentColor"/><path d="M12 16h6M22 16h6" stroke="#444" stroke-width="1.8" stroke-linecap="round"/><path d="M14 27h12" stroke="#444" stroke-width="1.8" stroke-linecap="round"/></svg>`,
+      ok: `<svg viewBox="0 0 40 40" class="plan-month-face-svg" aria-hidden="true"><circle cx="20" cy="20" r="18" fill="currentColor"/><circle cx="14" cy="17" r="1.6" fill="#444"/><circle cx="26" cy="17" r="1.6" fill="#444"/><path d="M14 26h12" stroke="#444" stroke-width="1.8" stroke-linecap="round"/></svg>`,
+      happy: `<svg viewBox="0 0 40 40" class="plan-month-face-svg" aria-hidden="true"><circle cx="20" cy="20" r="18" fill="currentColor"/><path d="M12 18l3-2 3 2M22 18l3-2 3 2" stroke="#444" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 25c2.2 3 9.8 3 12 0" stroke="#444" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>`,
+    };
+    return faces[kind] || faces.ok;
+  },
+
+  renderPlanStatsMonth() {
+    const anchor = this.getPlanStatsAnchor();
+    const monthKey = Store.monthKey(new Date(`${anchor}T00:00:00`));
+    const stats = Store.getPlanMonthStats(monthKey);
+    const today = todayStr();
+    const firstDow = new Date(stats.year, stats.month, 1).getDay();
+    const mondayBased = (firstDow + 6) % 7;
+    const weekdays = ['一', '二', '三', '四', '五', '六', '日']
+      .map((w) => `<span class="plan-month-weekday-chip">${w}</span>`)
+      .join('');
+    const cells = [];
+    for (let i = 0; i < mondayBased; i++) cells.push('<div class="plan-month-cell is-empty"></div>');
+    stats.days.forEach((day) => {
+      const isFuture = day.date > today;
+      let mood = null;
+      if (!isFuture) {
+        // 灰难过 / 粉不爽 / 绿平淡 / 橙开心 —— 按完成率映射
+        if (day.total === 0 || day.rate <= 0) mood = 'sad';
+        else if (day.rate < 0.34) mood = 'meh';
+        else if (day.rate < 0.67) mood = 'ok';
+        else mood = 'happy';
+      }
+      const tip = day.total
+        ? `${day.date} · 完成 ${day.done}/${day.total}`
+        : `${day.date}${isFuture ? ' · 未来' : ' · 无待办'}`;
+      cells.push(
+        mood
+          ? `<div class="plan-month-cell has-mood mood-${mood}" title="${this.escapeHtml(tip)}">${this.planMonthMoodFace(mood)}</div>`
+          : `<div class="plan-month-cell is-future" title="${this.escapeHtml(tip)}"><span class="plan-month-num">${day.d}</span></div>`
+      );
+    });
+    const label = `${stats.year} 年 ${String(stats.month + 1).padStart(2, '0')} 月`;
+    const rangeLabel =
+      monthKey === Store.currentPlanKey('monthly') ? `${label}（本月）` : label;
+    return `
+      <div class="plan-stats-month">
+        <div class="plan-stats-nav">
+          <button type="button" class="plan-stats-chevron-btn btn-plan-stats-prev" title="上一月" aria-label="上一月">${this.chevronIcon('prev')}</button>
+          <span class="plan-stats-range">${this.escapeHtml(rangeLabel)}</span>
+          <button type="button" class="plan-stats-chevron-btn btn-plan-stats-next" title="下一月" aria-label="下一月">${this.chevronIcon('next')}</button>
+        </div>
+        <div class="plan-month-tracker-title">Month Tracker</div>
+        <div class="plan-month-weekdays">${weekdays}</div>
+        <div class="plan-month-grid">${cells.join('')}</div>
+        <p class="plan-stats-legend">表情按当日待办完成率：灰低 → 粉 → 绿 → 橙高</p>
+      </div>`;
+  },
+
+  renderPlanSheet(type) {
+    const mode = this.planSheetColumn === 'done' ? 'done' : 'plan';
+    const key = this.planSheetKey || Store.currentPlanKey(type);
+    const editId = this.planSheetEditId || '';
+    const editFound = editId ? Store.findPlanItem(Store.getPlanItems(type, key), editId) : null;
+    const editItem = editFound?.item || null;
+    const chip = Store.planChipLabel(type, key);
+    const priority = this.planSheetPriority || 'none';
+    const parentId = this.planSheetParentId || '';
+    const rawParent = parentId
+      ? Store.getPlanItems(type, key).find((item) => item.id === parentId)
+      : null;
+    if (parentId && !rawParent) this.planSheetParentId = null;
+    const parentLabel = rawParent ? String(Store.resolvePlanItem(rawParent).text || '') : '';
+    const titleValue = editItem ? String(editItem.text || '') : '';
+    const noteValue = editItem ? String(editItem.note || '') : '';
+    const childRows = editItem && !editFound?.parent
+      ? (Array.isArray(editItem.children) ? editItem.children : [])
+          .filter((c) => !c.refKind)
+          .map(
+            (c) => `
+          <div class="plan-sheet-sub-row">
+            <span class="plan-sheet-subtodo-box" aria-hidden="true"></span>
+            <input type="text" class="plan-sheet-sub-input" maxlength="120" placeholder="子待办" autocomplete="off" value="${this.escapeHtml(c.text || '')}">
+          </div>`
+          )
+          .join('')
+      : '';
+    const titlePh = mode === 'done' ? '完成了什么...' : '准备做什么...';
+    const ariaLabel = editId
+      ? mode === 'done'
+        ? '编辑已完成事项'
+        : '编辑待办'
+      : mode === 'done'
+        ? '添加已完成事项'
+        : '添加待办';
+    const iconCal = `<svg class="plan-sheet-svg" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13.5" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M2.5 8h15" stroke="currentColor" stroke-width="1.6"/><path d="M6.5 2.2v2.6M13.5 2.2v2.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><rect x="5.2" y="10.2" width="2.2" height="2.2" rx="0.4" fill="currentColor"/><rect x="8.9" y="10.2" width="2.2" height="2.2" rx="0.4" fill="currentColor"/><rect x="12.6" y="10.2" width="2.2" height="2.2" rx="0.4" fill="currentColor"/></svg>`;
+    const iconFlag = `<svg class="plan-sheet-svg" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 17V3.5M5 3.5h8.2l-1.4 2.8 1.4 2.8H5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
+    const iconTag = `<svg class="plan-sheet-svg" viewBox="0 0 20 20" aria-hidden="true"><path d="M3.2 10.8 9.6 4.4A1.6 1.6 0 0 1 10.7 4h5.1v5.1a1.6 1.6 0 0 1-.5 1.1L8.9 16.6a1.2 1.2 0 0 1-1.7 0L3.2 12.5a1.2 1.2 0 0 1 0-1.7Z" fill="none" stroke="currentColor" stroke-width="1.55"/><circle cx="13.4" cy="6.6" r="1.1" fill="currentColor"/></svg>`;
+    const iconRef = `<svg class="plan-sheet-svg" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="1.55"/><path d="M12.4 11.8a2.6 2.6 0 1 1 0-3.6" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round"/><path d="M12.4 8.2v2.7c0 1.2.8 2.1 2 2.1" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round"/></svg>`;
+    const iconMore = `<svg class="plan-sheet-svg" viewBox="0 0 20 20" aria-hidden="true"><circle cx="4.5" cy="10" r="1.35" fill="currentColor"/><circle cx="10" cy="10" r="1.35" fill="currentColor"/><circle cx="15.5" cy="10" r="1.35" fill="currentColor"/></svg>`;
+    const iconSend = `<svg class="plan-sheet-svg plan-sheet-svg-send" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15.2V5.4M6.4 8.8 10 5.2l3.6 3.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    const toolsExtra =
+      mode === 'done'
+        ? ''
+        : `
+              <div class="plan-sheet-priority-wrap">
+                <button type="button" class="plan-sheet-icon plan-sheet-priority-btn is-priority-${priority}" title="优先级">${iconFlag}</button>
+                <div class="plan-sheet-priority-menu hidden" role="menu" aria-label="选择优先级">
+                  <button type="button" class="plan-sheet-priority-option is-high ${priority === 'high' ? 'is-active' : ''}" data-priority="high" role="menuitem">
+                    <span class="plan-priority-flag is-high">${iconFlag}</span>高优先级
+                  </button>
+                  <button type="button" class="plan-sheet-priority-option is-medium ${priority === 'medium' ? 'is-active' : ''}" data-priority="medium" role="menuitem">
+                    <span class="plan-priority-flag is-medium">${iconFlag}</span>中优先级
+                  </button>
+                  <button type="button" class="plan-sheet-priority-option is-low ${priority === 'low' ? 'is-active' : ''}" data-priority="low" role="menuitem">
+                    <span class="plan-priority-flag is-low">${iconFlag}</span>低优先级
+                  </button>
+                  <button type="button" class="plan-sheet-priority-option is-none ${priority === 'none' ? 'is-active' : ''}" data-priority="none" role="menuitem">
+                    <span class="plan-priority-flag is-none">${iconFlag}</span>无优先级
+                  </button>
+                </div>
+              </div>
+              <button type="button" class="plan-sheet-icon plan-sheet-tag-btn" title="标签">${iconTag}</button>
+              <button type="button" class="plan-sheet-icon plan-sheet-ref-btn" title="引用">${iconRef}</button>
+              <div class="plan-sheet-more-wrap">
+                <button type="button" class="plan-sheet-icon plan-sheet-more-btn" title="更多">${iconMore}</button>
+                <div class="plan-sheet-more-menu hidden" role="menu" aria-label="更多操作">
+                  <button type="button" class="plan-sheet-more-option" data-sheet-action="delete" role="menuitem">删除</button>
+                  <button type="button" class="plan-sheet-more-option" data-sheet-action="to-sub" role="menuitem">变为子待办</button>
+                </div>
+                <div class="plan-sheet-nest-picker hidden" role="dialog" aria-label="选择父待办"></div>
+              </div>`;
+    return `
+      <div class="plan-sheet-overlay">
+        <div class="plan-sheet" data-sheet-mode="${mode}" data-plan-type="${type}" data-plan-key="${this.escapeHtml(key)}" data-edit-id="${this.escapeHtml(editId)}" data-priority="${priority}" data-parent-id="${this.escapeHtml(this.planSheetParentId || '')}" role="dialog" aria-label="${ariaLabel}">
+          <div class="plan-sheet-body">
+            <div class="plan-sheet-fields">
+              <div class="plan-sheet-title-wrap">
+                <input type="text" class="plan-sheet-title plan-sheet-input" maxlength="200" placeholder="${titlePh}" autocomplete="off" value="${this.escapeHtml(titleValue)}">
+                <div class="plan-mention-menu hidden" role="listbox"></div>
+              </div>
+              <div class="plan-sheet-divider" aria-hidden="true"></div>
+              <textarea class="plan-sheet-desc" rows="2" maxlength="500" placeholder="描述" autocomplete="off">${this.escapeHtml(noteValue)}</textarea>
+              ${
+                mode === 'done'
+                  ? ''
+                  : `
+              <div class="plan-sheet-parent-chip ${this.planSheetParentId && parentLabel ? '' : 'hidden'}" title="将作为所选待办的子待办">
+                <span class="plan-sheet-parent-chip-text">子待办 · ${this.escapeHtml(parentLabel)}</span>
+                <button type="button" class="plan-sheet-parent-clear" title="取消变为子待办" aria-label="取消变为子待办">×</button>
+              </div>
+              <div class="plan-sheet-sublist ${editFound?.parent ? 'hidden' : ''}">
+                ${childRows}
+                <div class="plan-sheet-sub-row is-starter">
+                  <button type="button" class="plan-sheet-subtodo" title="添加子待办">
+                    <span class="plan-sheet-subtodo-box" aria-hidden="true"></span>
+                    <span>子待办</span>
+                  </button>
+                </div>
+              </div>`
+              }
+            </div>
+            <span class="plan-sheet-resize" aria-hidden="true"></span>
+          </div>
+          <div class="plan-sheet-toolbar">
+            <div class="plan-sheet-tools">
+              <div class="plan-sheet-date-wrap">
+                <button type="button" class="plan-sheet-date" title="选择时间">
+                  <span class="plan-sheet-date-icon" aria-hidden="true">${iconCal}</span>
+                  <span class="plan-sheet-date-text">${this.escapeHtml(chip)}</span>
+                </button>
+                <div class="plan-sheet-picker hidden" role="dialog" aria-label="选择时间"></div>
+              </div>
+              ${toolsExtra}
+            </div>
+            <div class="plan-sheet-tools-right">
+              <button type="button" class="plan-sheet-send" title="${editId ? '保存' : '添加'}">${iconSend}</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  },
+
+  renderTimelineSheet(type) {
+    const key = this.planSheetKey || Store.currentPlanKey(type);
+    const chip = Store.planChipLabel(type, key);
+    const now = new Date();
+    const timeValue = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const iconCal = `<svg class="plan-sheet-svg" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13.5" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M2.5 8h15" stroke="currentColor" stroke-width="1.6"/><path d="M6.5 2.2v2.6M13.5 2.2v2.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><rect x="5.2" y="10.2" width="2.2" height="2.2" rx="0.4" fill="currentColor"/><rect x="8.9" y="10.2" width="2.2" height="2.2" rx="0.4" fill="currentColor"/><rect x="12.6" y="10.2" width="2.2" height="2.2" rx="0.4" fill="currentColor"/></svg>`;
+    const iconSend = `<svg class="plan-sheet-svg plan-sheet-svg-send" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15.2V5.4M6.4 8.8 10 5.2l3.6 3.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    return `
+      <div class="plan-sheet-overlay">
+        <div class="plan-sheet plan-sheet-timeline" data-sheet-mode="timeline" data-plan-type="${type}" data-plan-key="${this.escapeHtml(key)}" role="dialog" aria-label="添加时间点">
+          <div class="plan-sheet-body">
+            <div class="plan-sheet-fields">
+              <div class="plan-sheet-title-wrap">
+                <input type="text" class="plan-sheet-title plan-sheet-input" maxlength="200" placeholder="当时在做什么..." autocomplete="off" value="">
+              </div>
+              <div class="plan-sheet-divider" aria-hidden="true"></div>
+              <textarea class="plan-sheet-desc" rows="2" maxlength="500" placeholder="补充说明（可选）" autocomplete="off"></textarea>
+            </div>
+          </div>
+          <div class="plan-sheet-toolbar">
+            <div class="plan-sheet-tools">
+              <div class="plan-sheet-date-wrap">
+                <button type="button" class="plan-sheet-date" title="选择日期">
+                  <span class="plan-sheet-date-icon" aria-hidden="true">${iconCal}</span>
+                  <span class="plan-sheet-date-text">${this.escapeHtml(chip)}</span>
+                </button>
+                <div class="plan-sheet-picker hidden" role="dialog" aria-label="选择日期"></div>
+              </div>
+              <label class="plan-moment-time-wrap" title="时间点">
+                <input type="time" class="plan-moment-time-input" value="${timeValue}" aria-label="时间点">
+              </label>
+            </div>
+            <div class="plan-sheet-tools-right">
+              <button type="button" class="plan-sheet-send" title="添加">${iconSend}</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  },
+
+  renderPlanSheetNestPicker(type, key, selectedId) {
+    const editId = this.planSheetEditId || '';
+    const items = Store.getPlanItems(type, key)
+      .map((item) => Store.resolvePlanItem(item))
+      .filter((item) => item.id !== editId);
+    if (!items.length) {
+      return `<div class="plan-sheet-nest-empty">当前没有可选择的待办</div>`;
+    }
+    return `
+      <div class="plan-sheet-nest-head">选择父待办</div>
+      <div class="plan-sheet-nest-list">
+        ${items
+          .map((item) => {
+            const active = item.id === selectedId ? 'is-active' : '';
+            const childCount = Array.isArray(item.children) ? item.children.length : 0;
+            return `<button type="button" class="plan-sheet-nest-option ${active}" data-parent-id="${this.escapeHtml(item.id)}">
+              <strong>${this.escapeHtml(item.text || '未命名待办')}</strong>
+              <span>${childCount ? `已有 ${childCount} 个子待办` : '暂无子待办'}</span>
+            </button>`;
+          })
+          .join('')}
+      </div>`;
+  },
+
+  formatPlanItemText(text) {
+    const raw = String(text || '');
+    if (!raw) return '';
+    return raw
+      .split(/(#[^\s#]+)/g)
+      .map((part) =>
+        part.startsWith('#')
+          ? `<span class="plan-tag">${this.escapeHtml(part)}</span>`
+          : this.escapeHtml(part)
+      )
+      .join('');
+  },
+
+  extractPlanTags(text) {
+    const tags = [];
+    String(text || '').replace(/(^|\s)#([^\s#]+)/g, (_, __, tag) => {
+      if (tag && !tags.includes(tag)) tags.push(tag);
+      return '';
+    });
+    return tags;
+  },
+
+  planPriorityClass(priority) {
+    const p = priority === 'high' || priority === 'medium' || priority === 'low' ? priority : 'none';
+    return `is-priority-${p}`;
+  },
+
+  /** 弹窗内时间选择器（日/周/月），锚定在计划模块内 */
+  renderPlanSheetPicker(type, selectedKey, viewMonthKey) {
+    if (type === 'weekly') {
+      const current = selectedKey || Store.currentPlanKey('weekly');
+      const base = Store.shiftPlanKey('weekly', current, -3);
+      const weeks = [];
+      let k = base;
+      for (let i = 0; i < 8; i++) {
+        weeks.push(k);
+        k = Store.shiftPlanKey('weekly', k, 1);
+      }
+      return `
+        <div class="plan-picker-head">选择周</div>
+        <div class="plan-picker-week-list">
+          ${weeks
+            .map((wk) => {
+              const label = Store.weekRangeLabel(wk);
+              const isCur = wk === Store.currentPlanKey('weekly');
+              const active = wk === current ? 'is-active' : '';
+              return `<button type="button" class="plan-picker-week-option ${active}" data-plan-key="${this.escapeHtml(wk)}">
+                <strong>${this.escapeHtml(isCur ? '本周' : wk)}</strong>
+                <span>${this.escapeHtml(label)}</span>
+              </button>`;
+            })
+            .join('')}
+        </div>`;
+    }
+
+    if (type === 'monthly') {
+      const current = selectedKey || Store.currentPlanKey('monthly');
+      const m = String(viewMonthKey || current).match(/^(\d{4})-(\d{2})$/);
+      const year = m ? Number(m[1]) : new Date().getFullYear();
+      const months = [];
+      for (let i = 1; i <= 12; i++) {
+        const mk = `${year}-${String(i).padStart(2, '0')}`;
+        months.push(mk);
+      }
+      return `
+        <div class="plan-picker-head">
+          <button type="button" class="plan-picker-nav" data-picker-year="-1" title="上一年">‹</button>
+          <span>${year} 年</span>
+          <button type="button" class="plan-picker-nav" data-picker-year="1" title="下一年">›</button>
+        </div>
+        <div class="plan-picker-month-grid">
+          ${months
+            .map((mk) => {
+              const n = Number(mk.slice(5));
+              const active = mk === current ? 'is-active' : '';
+              const isCur = mk === Store.currentPlanKey('monthly') ? 'is-current' : '';
+              return `<button type="button" class="plan-picker-month-option ${active} ${isCur}" data-plan-key="${mk}">${n}月</button>`;
+            })
+            .join('')}
+        </div>`;
+    }
+
+    // daily calendar
+    const selected = selectedKey || Store.currentPlanKey('daily');
+    const vm = String(viewMonthKey || selected.slice(0, 7)).match(/^(\d{4})-(\d{2})$/);
+    const year = vm ? Number(vm[1]) : new Date().getFullYear();
+    const month = vm ? Number(vm[2]) - 1 : new Date().getMonth();
+    const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`;
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const firstDow = (new Date(year, month, 1).getDay() + 6) % 7;
+    const today = todayStr();
+    const cells = [];
+    for (let i = 0; i < firstDow; i++) cells.push('<span class="plan-picker-day is-empty"></span>');
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = `${monthKey}-${String(d).padStart(2, '0')}`;
+      const cls = [
+        'plan-picker-day',
+        date === selected ? 'is-active' : '',
+        date === today ? 'is-today' : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+      cells.push(
+        `<button type="button" class="${cls}" data-plan-key="${date}">${d}</button>`
+      );
+    }
+    return `
+      <div class="plan-picker-head">
+        <button type="button" class="plan-picker-nav" data-picker-month="-1" title="上一月">‹</button>
+        <span>${year}年${month + 1}月</span>
+        <button type="button" class="plan-picker-nav" data-picker-month="1" title="下一月">›</button>
+      </div>
+      <div class="plan-picker-weekdays">${['一', '二', '三', '四', '五', '六', '日'].map((w) => `<span>${w}</span>`).join('')}</div>
+      <div class="plan-picker-day-grid">${cells.join('')}</div>
+      <button type="button" class="plan-picker-today" data-plan-key="${today}">回到今天</button>`;
+  },
+
+  renderPlanItemActions() {
+    return `
+      <div class="plan-item-actions">
+        <button type="button" class="icon-btn btn-plan-up" title="向上调整顺序" aria-label="向上">↑</button>
+        <button type="button" class="icon-btn btn-plan-down" title="向下调整顺序" aria-label="向下">↓</button>
+        <button type="button" class="icon-btn btn-plan-edit" title="编辑" aria-label="编辑">✎</button>
+      </div>`;
+  },
+
+  openPlanSheet(column = 'plan') {
+    const planType =
+      this.planScope === 'weekly' || this.planScope === 'monthly' ? this.planScope : 'daily';
+    const timeline = Store.getPlanTimeline(planType, this.getPlanListAnchor());
+    const col = column === 'done' || column === 'timeline' ? column : 'plan';
+    this.planSheetColumn = col;
+    this.planSheetKey = timeline.today.key || Store.currentPlanKey(planType);
+    this.planSheetPriority = 'none';
+    this.planSheetParentId = null;
+    this.planSheetEditId = null;
+    this.planSheetOriginKey = null;
+    this.planEditingId = null;
+    this.render();
+  },
+
+  openPlanSheetEdit(type, key, itemId) {
+    const items = Store.getPlanItems(type, key);
+    const found = Store.findPlanItem(items, itemId);
+    if (!found) return;
+    const item = found.item;
+    this.planSheetColumn = 'plan';
+    this.planSheetKey = key;
+    this.planSheetOriginKey = key;
+    this.planSheetEditId = itemId;
+    this.planSheetPriority =
+      item.priority === 'high' || item.priority === 'medium' || item.priority === 'low'
+        ? item.priority
+        : 'none';
+    this.planSheetParentId = found.parent?.id || null;
+    this.planEditingId = null;
+    this.render();
+  },
+
+  closePlanSheet() {
+    this.planSheetColumn = null;
+    this.planSheetPriority = 'none';
+    this.planSheetParentId = null;
+    this.planSheetEditId = null;
+    this.planSheetOriginKey = null;
+    this.render();
   },
 
   renderPlanItem(item, options = {}) {
@@ -599,21 +1415,36 @@ const App = {
     const children = Array.isArray(item.children) ? item.children : [];
     const childDone = children.filter((c) => c.done).length;
     const canNest = Boolean(options.canNest);
-    const editing = Boolean(options.editingId && options.editingId === item.id);
+    const editing =
+      Boolean(options.editingId && options.editingId === item.id) ||
+      this.planSheetEditId === item.id;
     const hasChildren = children.length > 0;
     const collapsed = hasChildren && Store.isPlanChildrenCollapsed(item.id);
+    const priority = item.priority === 'high' || item.priority === 'medium' || item.priority === 'low' ? item.priority : 'none';
 
     return `
-      <li class="plan-item ${item.done ? 'is-done' : ''} ${editing ? 'is-editing' : ''} ${hasChildren ? 'has-children' : ''} ${collapsed ? 'is-collapsed' : ''} ${isRef ? `is-ref is-ref-${item.refKind}` : ''}" data-id="${item.id}" ${isRef ? `data-ref-kind="${item.refKind}" data-ref-id="${item.refId}"` : ''}>
+      <li class="plan-item ${item.done ? 'is-done' : ''} ${editing ? 'is-editing' : ''} ${hasChildren ? 'has-children' : ''} ${collapsed ? 'is-collapsed' : ''} ${this.planPriorityClass(priority)} ${isRef ? `is-ref is-ref-${item.refKind}` : ''}" data-id="${item.id}" data-priority="${priority}" ${isRef ? `data-ref-kind="${item.refKind}" data-ref-id="${item.refId}"` : ''}>
         <div class="plan-item-row">
           ${
             hasChildren
-              ? `<button type="button" class="plan-children-toggle" title="${collapsed ? '展开子待办' : '收起子待办'}" aria-expanded="${collapsed ? 'false' : 'true'}">${collapsed ? '>' : 'v'}</button>`
+              ? `<button type="button" class="plan-children-toggle" title="${collapsed ? '展开子待办' : '收起子待办'}" aria-expanded="${collapsed ? 'false' : 'true'}">
+                  <span class="plan-children-chevron${collapsed ? ' is-collapsed' : ''}" aria-hidden="true">
+                    <svg viewBox="0 0 12 12" width="12" height="12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </span>
+                </button>`
               : ''
           }
           <button type="button" class="plan-check ${item.done ? 'is-done' : ''}" title="${item.done ? '标为未完成' : '标为完成'}">${item.done ? '✓' : ''}</button>
+          ${
+            priority !== 'none'
+              ? `<span class="plan-priority-dot ${this.planPriorityClass(priority)}" title="优先级" aria-hidden="true"></span>`
+              : ''
+          }
           <div class="plan-main">
-            <span class="plan-text${isRef ? ' plan-text-ref' : ''}" ${isRef ? 'role="link" tabindex="0" title="查看引用"' : ''}>${this.escapeHtml(item.text)}${item.refAlive === false ? ' <em class="plan-ref-missing">（已删除）</em>' : ''}</span>
+            <span class="plan-text${isRef ? ' plan-text-ref' : ''}" ${isRef ? 'role="link" tabindex="0" title="查看引用"' : ''}>${this.formatPlanItemText(item.text)}${item.refAlive === false ? ' <em class="plan-ref-missing">（已删除）</em>' : ''}</span>
+            ${item.note ? `<span class="plan-item-note">${this.escapeHtml(item.note)}</span>` : ''}
             ${
               isRef
                 ? `<span class="plan-ref-meta"><span class="plan-ref-badge plan-ref-badge-${item.refKind}">${this.escapeHtml(badge)}</span>${meta ? `<span class="plan-ref-time">${this.escapeHtml(meta)}</span>` : ''}</span>`
@@ -625,7 +1456,7 @@ const App = {
                 : ''
             }
           </div>
-          ${this.renderPlanItemActions({ editing })}
+          ${this.renderPlanItemActions()}
         </div>
         ${
           hasChildren
@@ -660,37 +1491,34 @@ const App = {
       resolved.refKind === 'interview'
         ? this.formatPlanInterviewTime(resolved.refId)
         : resolved.refMeta || '';
-    const editing = Boolean(options.editingId && options.editingId === resolved.id);
+    const editing =
+      Boolean(options.editingId && options.editingId === resolved.id) ||
+      this.planSheetEditId === resolved.id;
+    const priority =
+      resolved.priority === 'high' || resolved.priority === 'medium' || resolved.priority === 'low'
+        ? resolved.priority
+        : 'none';
 
     return `
-      <li class="plan-item plan-sub-item ${resolved.done ? 'is-done' : ''} ${editing ? 'is-editing' : ''} ${isRef ? `is-ref is-ref-${resolved.refKind}` : ''}" data-id="${resolved.id}" ${isRef ? `data-ref-kind="${resolved.refKind}" data-ref-id="${resolved.refId}"` : ''}>
+      <li class="plan-item plan-sub-item ${resolved.done ? 'is-done' : ''} ${editing ? 'is-editing' : ''} ${this.planPriorityClass(priority)} ${isRef ? `is-ref is-ref-${resolved.refKind}` : ''}" data-id="${resolved.id}" data-priority="${priority}" ${isRef ? `data-ref-kind="${resolved.refKind}" data-ref-id="${resolved.refId}"` : ''}>
         <div class="plan-item-row">
           <button type="button" class="plan-check ${resolved.done ? 'is-done' : ''}" title="${resolved.done ? '标为未完成' : '标为完成'}">${resolved.done ? '✓' : ''}</button>
+          ${
+            priority !== 'none'
+              ? `<span class="plan-priority-dot ${this.planPriorityClass(priority)}" title="优先级" aria-hidden="true"></span>`
+              : ''
+          }
           <div class="plan-main">
-            <span class="plan-text${isRef ? ' plan-text-ref' : ''}" ${isRef ? 'role="link" tabindex="0" title="查看引用"' : ''}>${this.escapeHtml(resolved.text)}${resolved.refAlive === false ? ' <em class="plan-ref-missing">（已删除）</em>' : ''}</span>
+            <span class="plan-text${isRef ? ' plan-text-ref' : ''}" ${isRef ? 'role="link" tabindex="0" title="查看引用"' : ''}>${this.formatPlanItemText(resolved.text)}${resolved.refAlive === false ? ' <em class="plan-ref-missing">（已删除）</em>' : ''}</span>
             ${
               isRef
                 ? `<span class="plan-ref-meta"><span class="plan-ref-badge plan-ref-badge-${resolved.refKind}">${this.escapeHtml(badge)}</span>${meta ? `<span class="plan-ref-time">${this.escapeHtml(meta)}</span>` : ''}</span>`
                 : ''
             }
           </div>
-          ${this.renderPlanItemActions({ editing })}
+          ${this.renderPlanItemActions()}
         </div>
       </li>`;
-  },
-
-  renderPlanItemActions({ editing = false } = {}) {
-    return `
-      <div class="plan-item-actions">
-        <button type="button" class="icon-btn btn-plan-edit ${editing ? 'hidden' : ''}" title="编辑" aria-label="编辑">✎</button>
-        <div class="plan-edit-toolbar ${editing ? '' : 'hidden'}">
-          <button type="button" class="icon-btn btn-plan-add-sub" title="添加子待办">+</button>
-          <button type="button" class="icon-btn btn-plan-nest" title="成为子待办">↵</button>
-          <button type="button" class="icon-btn btn-plan-up" title="向上调整顺序">↑</button>
-          <button type="button" class="icon-btn btn-plan-down" title="向下调整顺序">↓</button>
-          <button type="button" class="icon-btn btn-plan-delete" title="删除">×</button>
-        </div>
-      </div>`;
   },
 
   openPlanNestPicker(type, key, itemId) {
@@ -758,8 +1586,8 @@ const App = {
 
   getPlanMentionKinds() {
     return [
+      { id: 'handwrite', label: '题库', aliases: ['题库', '算法题', '算法', '手撕', 'leetcode'] },
       { id: 'bagu', label: '面试题', aliases: ['面试题', '八股', 'bagu'] },
-      { id: 'handwrite', label: '算法题', aliases: ['算法题', '算法', '手撕', 'leetcode'] },
       { id: 'project', label: '项目经历', aliases: ['项目经历', '项目', 'project'] },
       { id: 'interview', label: '面试', aliases: ['面试', 'interview'] },
     ];
@@ -1049,12 +1877,12 @@ const App = {
     let activeKind = kinds.some((k) => k.id === initialKind) ? initialKind : 'bagu';
 
     this.resetModalFooter();
-    document.getElementById('modalTitle').textContent = '引用到每日计划';
+    document.getElementById('modalTitle').textContent = '引用到每日待办';
     const form = document.getElementById('recordForm');
     document.getElementById('modal')?.classList.remove('modal-rich', 'modal-bagu-answers');
     document.getElementById('modalSave')?.classList.remove('hidden');
     const saveBtn = document.getElementById('modalSave');
-    if (saveBtn) saveBtn.textContent = '加入计划';
+    if (saveBtn) saveBtn.textContent = '加入待办';
     document.getElementById('modalCancel').textContent = '取消';
     document.getElementById('btnBaguAnswerEdit')?.classList.add('hidden');
 
@@ -1112,7 +1940,7 @@ const App = {
                 })
                 .join('')}
             </div>`
-          : '<div class="empty-state empty-inline">还没有算法题，请先在「手撕」中添加</div>';
+          : '<div class="empty-state empty-inline">还没有算法题，请先在「算法」中添加</div>';
       } else if (activeKind === 'project') {
         const records = Store.getSortedRecords('core', 'project').map((r) => this.normalizeProjectRecord(r));
         body = records.length
@@ -1132,7 +1960,7 @@ const App = {
                 })
                 .join('')}
             </div>`
-          : '<div class="empty-state empty-inline">还没有项目经历，请先在「项目准备」中添加</div>';
+          : '<div class="empty-state empty-inline">还没有项目经历，请先在「项目」中添加</div>';
       }
 
       form.innerHTML = `
@@ -1144,7 +1972,7 @@ const App = {
             )
             .join('')}
         </div>
-        <p class="form-hint">勾选要加入「每日计划」的内容；已引用的会保持勾选。取消勾选不会从计划删除，请在计划列表点 ×。</p>
+        <p class="form-hint">勾选要加入「每日待办」的内容；已引用的会保持勾选。取消勾选不会从待办删除，请在待办列表点 ×。</p>
         <div class="plan-ref-picker-body">${body}</div>`;
 
       form.querySelectorAll('.plan-ref-tab').forEach((tab) => {
@@ -1251,157 +2079,189 @@ const App = {
   },
 
   bindPlanPanels() {
-    document.querySelectorAll('.plan-panel').forEach((panel) => {
-      const type = panel.dataset.planType;
-      const key = panel.dataset.planKey;
-      const input = panel.querySelector('.plan-input');
+    const modules = document.querySelectorAll('.plan-module');
+    if (!modules.length) return;
 
-      const enterEdit = (itemId) => {
-        this.planEditingId = itemId || null;
+    const ctxOf = (el) => {
+      const moduleEl = el?.closest?.('.plan-module');
+      const bucket = el?.closest?.('.plan-bucket');
+      const type = moduleEl?.dataset?.planType;
+      const key = bucket?.dataset?.planKey;
+      if (!type || !key) return null;
+      return { type, key, module: moduleEl };
+    };
+
+    const showSubAdd = (parentEl, moduleEl) => {
+      if (!parentEl || !moduleEl) return;
+      const parentId = parentEl.dataset.id;
+      if (parentId && Store.isPlanChildrenCollapsed(parentId)) {
+        Store.setPlanChildrenCollapsed(parentId, false);
+        this.planEditingId = parentId;
+        this._planPendingSubAddId = parentId;
         this.render();
-      };
+        return;
+      }
+      const row = parentEl.querySelector(':scope > .plan-sub-add');
+      const subInput = row?.querySelector('.plan-sub-input');
+      if (!row) return;
+      moduleEl.querySelectorAll('.plan-sub-add').forEach((el) => {
+        if (el !== row) el.classList.add('hidden');
+      });
+      row.classList.remove('hidden');
+      subInput?.focus();
+    };
 
-      const showSubAdd = (parentEl) => {
-        if (!parentEl) return;
-        const parentId = parentEl.dataset.id;
-        if (parentId && Store.isPlanChildrenCollapsed(parentId)) {
-          Store.setPlanChildrenCollapsed(parentId, false);
-          this.planEditingId = parentId;
-          this._planPendingSubAddId = parentId;
-          this.render();
-          return;
-        }
-        const row = parentEl.querySelector(':scope > .plan-sub-add');
-        const subInput = row?.querySelector('.plan-sub-input');
-        if (!row) return;
-        panel.querySelectorAll('.plan-sub-add').forEach((el) => {
-          if (el !== row) el.classList.add('hidden');
-        });
-        row.classList.remove('hidden');
-        subInput?.focus();
-      };
+    const toggleChildren = (itemEl) => {
+      if (!itemEl?.dataset.id) return;
+      Store.togglePlanChildrenCollapsed(itemEl.dataset.id);
+      this.render();
+    };
 
-      const toggleChildren = (itemEl) => {
-        if (!itemEl?.dataset.id) return;
-        Store.togglePlanChildrenCollapsed(itemEl.dataset.id);
-        this.render();
-      };
-
-      const add = () => {
-        const text = String(input?.value || '').trim();
-        if (!text || text === '@') {
-          input?.focus();
-          return;
-        }
-        if (this.parsePlanMention(input?.value || '')) {
-          input?.focus();
-          return;
-        }
+    document.querySelectorAll('[data-plan-scope]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const scope = btn.dataset.planScope;
+        if (scope !== 'daily' && scope !== 'weekly' && scope !== 'monthly') return;
+        if (scope === this.planScope) return;
+        this.planScope = scope;
+        this.planListAnchor = todayStr();
+        this.planSheetColumn = null;
         this.planEditingId = null;
-        Store.addPlanItem(type, key, text);
-        if (input) input.value = '';
         this.render();
-      };
-
-      const mainMenu = panel.querySelector('.plan-input-wrap > .plan-mention-menu');
-      this.bindPlanMentionInput(input, mainMenu, {
-        onSelectItem: (opt) => {
-          Store.addPlanRefs(type, key, opt.kind, [opt.id]);
-          this.planEditingId = null;
-          this.render();
-        },
       });
+    });
 
-      panel.querySelector('.btn-plan-add')?.addEventListener('click', add);
-      input?.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          if (mainMenu && !mainMenu.classList.contains('hidden')) return;
-          e.preventDefault();
-          add();
+    document.querySelectorAll('.btn-plan-list-prev').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.shiftPlanListAnchor(-1);
+        this.render();
+      });
+    });
+    document.querySelectorAll('.btn-plan-list-next').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.shiftPlanListAnchor(1);
+        this.render();
+      });
+    });
+
+    document.querySelectorAll('[data-plan-stats-scope]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const scope = btn.dataset.planStatsScope;
+        if (scope !== 'daily' && scope !== 'weekly' && scope !== 'monthly') return;
+        if (scope === this.planStatsScope) return;
+        this.planStatsScope = scope;
+        this.render();
+      });
+    });
+
+    document.querySelectorAll('.btn-plan-stats-prev').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const mode = this.planStatsScope || 'weekly';
+        const anchor = this.getPlanStatsAnchor();
+        if (mode === 'daily') {
+          this.planStatsAnchor = Store.shiftPlanKey('daily', anchor, -1);
+        } else if (mode === 'monthly') {
+          const mk = Store.monthKey(new Date(`${anchor}T00:00:00`));
+          this.planStatsAnchor = `${Store.shiftPlanKey('monthly', mk, -1)}-01`;
+        } else {
+          const wk = Store.weekKey(new Date(`${anchor}T00:00:00`));
+          this.planStatsAnchor = Store.getPlanWeekTracker(Store.shiftPlanKey('weekly', wk, -1))
+            .days[0];
         }
+        this.render();
       });
+    });
 
-      panel.querySelectorAll('.plan-check').forEach((btn) => {
+    document.querySelectorAll('.btn-plan-stats-next').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const mode = this.planStatsScope || 'weekly';
+        const anchor = this.getPlanStatsAnchor();
+        if (mode === 'daily') {
+          this.planStatsAnchor = Store.shiftPlanKey('daily', anchor, 1);
+        } else if (mode === 'monthly') {
+          const mk = Store.monthKey(new Date(`${anchor}T00:00:00`));
+          this.planStatsAnchor = `${Store.shiftPlanKey('monthly', mk, 1)}-01`;
+        } else {
+          const wk = Store.weekKey(new Date(`${anchor}T00:00:00`));
+          this.planStatsAnchor = Store.getPlanWeekTracker(Store.shiftPlanKey('weekly', wk, 1))
+            .days[0];
+        }
+        this.render();
+      });
+    });
+
+    document.querySelectorAll('.btn-plan-fab').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.openPlanSheet(btn.dataset.planColumn || 'plan');
+      });
+    });
+
+    document.querySelectorAll('.btn-plan-moment-del').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const item = btn.closest('.plan-moment-item');
+        const moduleEl = btn.closest('.plan-module');
+        const type = moduleEl?.dataset.planType || 'daily';
+        const key = Store.getPlanTimeline(type, this.getPlanListAnchor()).today.key;
+        const id = item?.dataset.momentId;
+        if (!id || !key) return;
+        Store.deletePlanMoment(type, key, id);
+        this.render();
+      });
+    });
+
+    modules.forEach((moduleEl) => {
+      moduleEl.querySelectorAll('.plan-check').forEach((btn) => {
         btn.addEventListener('click', () => {
           const item = btn.closest('.plan-item');
-          if (!item) return;
-          Store.togglePlanItem(type, key, item.dataset.id);
+          const ctx = ctxOf(item);
+          if (!item || !ctx) return;
+          Store.togglePlanItem(ctx.type, ctx.key, item.dataset.id);
           this.render();
         });
       });
 
-      panel.querySelectorAll('.plan-children-toggle, .btn-plan-toggle-children').forEach((btn) => {
+      moduleEl.querySelectorAll('.plan-children-toggle, .btn-plan-toggle-children').forEach((btn) => {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
-          const item = btn.closest('.plan-item:not(.plan-sub-item)');
-          toggleChildren(item);
+          toggleChildren(btn.closest('.plan-item:not(.plan-sub-item)'));
         });
       });
 
-      panel.querySelectorAll('.btn-plan-edit').forEach((btn) => {
+      moduleEl.querySelectorAll('.btn-plan-edit').forEach((btn) => {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
           const item = btn.closest('.plan-item');
-          if (!item) return;
-          enterEdit(item.dataset.id);
+          const ctx = ctxOf(item);
+          if (!item || !ctx) return;
+          this.openPlanSheetEdit(ctx.type, ctx.key, item.dataset.id);
         });
       });
 
-      panel.querySelectorAll('.btn-plan-add-sub').forEach((btn) => {
+      moduleEl.querySelectorAll('.btn-plan-up').forEach((btn) => {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
           const item = btn.closest('.plan-item');
-          if (!item) return;
-          const parentEl = item.classList.contains('plan-sub-item')
-            ? item.closest('.plan-item:not(.plan-sub-item)')
-            : item;
-          showSubAdd(parentEl);
-        });
-      });
-
-      panel.querySelectorAll('.btn-plan-up').forEach((btn) => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const item = btn.closest('.plan-item');
-          if (!item) return;
-          this.planEditingId = item.dataset.id;
-          Store.movePlanItemOrder(type, key, item.dataset.id, -1);
+          const ctx = ctxOf(item);
+          if (!item || !ctx) return;
+          Store.movePlanItemOrder(ctx.type, ctx.key, item.dataset.id, -1);
           this.render();
         });
       });
 
-      panel.querySelectorAll('.btn-plan-down').forEach((btn) => {
+      moduleEl.querySelectorAll('.btn-plan-down').forEach((btn) => {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
           const item = btn.closest('.plan-item');
-          if (!item) return;
-          this.planEditingId = item.dataset.id;
-          Store.movePlanItemOrder(type, key, item.dataset.id, 1);
+          const ctx = ctxOf(item);
+          if (!item || !ctx) return;
+          Store.movePlanItemOrder(ctx.type, ctx.key, item.dataset.id, 1);
           this.render();
         });
       });
-
-      panel.querySelectorAll('.btn-plan-nest').forEach((btn) => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const item = btn.closest('.plan-item');
-          if (!item) return;
-          this.openPlanNestPicker(type, key, item.dataset.id);
-        });
-      });
-
-      panel.querySelectorAll('.btn-plan-delete').forEach((btn) => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const item = btn.closest('.plan-item');
-          if (!item) return;
-          this.planEditingId = null;
-          Store.deletePlanItem(type, key, item.dataset.id);
-          this.render();
-        });
-      });
-
-      panel.querySelectorAll('.plan-text-ref').forEach((el) => {
+      moduleEl.querySelectorAll('.plan-text-ref').forEach((el) => {
         const open = (e) => {
           e.stopPropagation();
           const item = el.closest('.plan-item');
@@ -1417,15 +2277,17 @@ const App = {
         });
       });
 
-      panel.querySelectorAll('.plan-sub-add').forEach((row) => {
+      moduleEl.querySelectorAll('.plan-sub-add').forEach((row) => {
         const parent = row.closest('.plan-item:not(.plan-sub-item)');
+        const ctx = ctxOf(parent);
         const subInput = row.querySelector('.plan-sub-input');
         const subMenu = row.querySelector('.plan-mention-menu');
+        if (!ctx) return;
 
         this.bindPlanMentionInput(subInput, subMenu, {
           onSelectItem: (opt) => {
             if (!parent?.dataset.id) return;
-            Store.addPlanSubRef(type, key, parent.dataset.id, opt.kind, opt.id);
+            Store.addPlanSubRef(ctx.type, ctx.key, parent.dataset.id, opt.kind, opt.id);
             this.planEditingId = parent.dataset.id;
             this.render();
           },
@@ -1442,7 +2304,7 @@ const App = {
             return;
           }
           this.planEditingId = parent.dataset.id;
-          Store.addPlanSubItem(type, key, parent.dataset.id, text);
+          Store.addPlanSubItem(ctx.type, ctx.key, parent.dataset.id, text);
           this.render();
         };
         row.querySelector('.btn-plan-sub-confirm')?.addEventListener('click', confirm);
@@ -1463,19 +2325,21 @@ const App = {
           }
         });
       });
-
-      if (this._planPendingSubAddId) {
-        const pendingId = this._planPendingSubAddId;
-        this._planPendingSubAddId = null;
-        const fresh = panel.querySelector(`.plan-item[data-id="${pendingId}"]`);
-        const row = fresh?.querySelector(':scope > .plan-sub-add');
-        const subInput = row?.querySelector('.plan-sub-input');
-        if (row) {
-          row.classList.remove('hidden');
-          subInput?.focus();
-        }
-      }
     });
+
+    if (this._planPendingSubAddId) {
+      const pendingId = this._planPendingSubAddId;
+      this._planPendingSubAddId = null;
+      const fresh = document.querySelector(`.plan-item[data-id="${pendingId}"]`);
+      const row = fresh?.querySelector(':scope > .plan-sub-add');
+      const subInput = row?.querySelector('.plan-sub-input');
+      if (row) {
+        row.classList.remove('hidden');
+        subInput?.focus();
+      }
+    }
+
+    this.bindPlanSheet();
 
     if (!this._planEditOutsideBound) {
       this._planEditOutsideBound = true;
@@ -1484,16 +2348,581 @@ const App = {
         if (e.target.closest('.plan-item.is-editing')) return;
         if (e.target.closest('.plan-sub-add')) return;
         if (e.target.closest('#modalOverlay')) return;
+        if (e.target.closest('.plan-sheet')) return;
         this.planEditingId = null;
         this.render();
       });
       document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && this.planSheetColumn) {
+          this.closePlanSheet();
+          return;
+        }
         if (e.key === 'Escape' && this.planEditingId) {
           this.planEditingId = null;
           this.render();
         }
       });
     }
+  },
+
+  bindPlanSheet() {
+    const overlay = document.querySelector('.plan-module .plan-sheet-overlay');
+    const sheet = overlay?.querySelector('.plan-sheet');
+    if (!overlay || !sheet) return;
+    const sheetMode = sheet.dataset.sheetMode || this.planSheetColumn || 'plan';
+    if (sheetMode === 'timeline') {
+      this.bindTimelineSheet(overlay, sheet);
+      return;
+    }
+    const type = sheet.dataset.planType || 'daily';
+    const input = sheet.querySelector('.plan-sheet-title') || sheet.querySelector('.plan-sheet-input');
+    const desc = sheet.querySelector('.plan-sheet-desc');
+    const menu = sheet.querySelector('.plan-mention-menu');
+    const dateBtn = sheet.querySelector('.plan-sheet-date');
+    const picker = sheet.querySelector('.plan-sheet-picker');
+    const sublist = sheet.querySelector('.plan-sheet-sublist');
+    const priorityBtn = sheet.querySelector('.plan-sheet-priority-btn');
+    const priorityMenu = sheet.querySelector('.plan-sheet-priority-menu');
+    const tagBtn = sheet.querySelector('.plan-sheet-tag-btn');
+    const refBtn = sheet.querySelector('.plan-sheet-ref-btn');
+    const moreBtn = sheet.querySelector('.plan-sheet-more-btn');
+    const moreMenu = sheet.querySelector('.plan-sheet-more-menu');
+    const nestPicker = sheet.querySelector('.plan-sheet-nest-picker');
+    const parentChip = sheet.querySelector('.plan-sheet-parent-chip');
+    const parentChipText = sheet.querySelector('.plan-sheet-parent-chip-text');
+    let priority = this.planSheetPriority || 'none';
+    let nestParentId = this.planSheetParentId || null;
+    let pickerViewKey =
+      type === 'daily'
+        ? (this.planSheetKey || Store.currentPlanKey('daily')).slice(0, 7)
+        : type === 'monthly'
+          ? this.planSheetKey || Store.currentPlanKey('monthly')
+          : this.planSheetKey || Store.currentPlanKey('weekly');
+
+    const refreshChip = () => {
+      const key = this.planSheetKey || Store.currentPlanKey(type);
+      sheet.dataset.planKey = key;
+      const text = sheet.querySelector('.plan-sheet-date-text');
+      if (text) text.textContent = Store.planChipLabel(type, key);
+      // 切换日期后校验父待办是否仍存在
+      if (nestParentId && !Store.getPlanItems(type, key).some((item) => item.id === nestParentId)) {
+        clearNestParent();
+      }
+    };
+
+    const closePicker = () => picker?.classList.add('hidden');
+    const closePriorityMenu = () => priorityMenu?.classList.add('hidden');
+    const closeMoreMenu = () => moreMenu?.classList.add('hidden');
+    const closeNestPicker = () => nestPicker?.classList.add('hidden');
+    const closeFloating = () => {
+      closePicker();
+      closePriorityMenu();
+      closeMoreMenu();
+      closeNestPicker();
+    };
+
+    const refreshParentChip = () => {
+      const key = this.planSheetKey || Store.currentPlanKey(type);
+      sheet.dataset.parentId = nestParentId || '';
+      this.planSheetParentId = nestParentId;
+      if (!parentChip) return;
+      if (!nestParentId) {
+        parentChip.classList.add('hidden');
+        if (parentChipText) parentChipText.textContent = '';
+        return;
+      }
+      const raw = Store.getPlanItems(type, key).find((item) => item.id === nestParentId);
+      const label = raw ? String(Store.resolvePlanItem(raw).text || '未命名待办') : '';
+      if (!label) {
+        nestParentId = null;
+        this.planSheetParentId = null;
+        parentChip.classList.add('hidden');
+        return;
+      }
+      if (parentChipText) parentChipText.textContent = `子待办 · ${label}`;
+      parentChip.classList.remove('hidden');
+    };
+
+    const clearNestParent = () => {
+      nestParentId = null;
+      this.planSheetParentId = null;
+      refreshParentChip();
+      closeNestPicker();
+    };
+
+    const paintNestPicker = () => {
+      if (!nestPicker) return;
+      const key = this.planSheetKey || Store.currentPlanKey(type);
+      nestPicker.innerHTML = this.renderPlanSheetNestPicker(type, key, nestParentId);
+      nestPicker.querySelectorAll('[data-parent-id]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          nestParentId = btn.dataset.parentId || null;
+          this.planSheetParentId = nestParentId;
+          refreshParentChip();
+          closeNestPicker();
+        });
+      });
+    };
+
+    const openNestParentPicker = () => {
+      closePicker();
+      closePriorityMenu();
+      closeMoreMenu();
+      if (!nestPicker) return;
+      paintNestPicker();
+      nestPicker.classList.remove('hidden');
+    };
+
+    const applyPriority = (next) => {
+      priority = next === 'high' || next === 'medium' || next === 'low' ? next : 'none';
+      this.planSheetPriority = priority;
+      sheet.dataset.priority = priority;
+      if (priorityBtn) {
+        priorityBtn.classList.remove('is-priority-none', 'is-priority-high', 'is-priority-medium', 'is-priority-low');
+        priorityBtn.classList.add(`is-priority-${priority}`);
+      }
+      priorityMenu?.querySelectorAll('.plan-sheet-priority-option').forEach((btn) => {
+        btn.classList.toggle('is-active', btn.dataset.priority === priority);
+      });
+      closePriorityMenu();
+    };
+
+    const paintPicker = () => {
+      if (!picker) return;
+      picker.innerHTML = this.renderPlanSheetPicker(
+        type,
+        this.planSheetKey || Store.currentPlanKey(type),
+        pickerViewKey
+      );
+      picker.querySelectorAll('[data-plan-key]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const k = btn.dataset.planKey;
+          if (!k) return;
+          this.planSheetKey = k;
+          refreshChip();
+          closePicker();
+        });
+      });
+      picker.querySelectorAll('[data-picker-month]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const delta = Number(btn.dataset.pickerMonth) || 0;
+          pickerViewKey = Store.shiftPlanKey('monthly', pickerViewKey, delta);
+          paintPicker();
+        });
+      });
+      picker.querySelectorAll('[data-picker-year]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const delta = Number(btn.dataset.pickerYear) || 0;
+          const y = Number(String(pickerViewKey).slice(0, 4)) + delta;
+          const mm = String(pickerViewKey).slice(5, 7) || '01';
+          pickerViewKey = `${y}-${mm}`;
+          paintPicker();
+        });
+      });
+    };
+
+    const makeSubRow = (value = '', { starter = false } = {}) => {
+      const row = document.createElement('div');
+      row.className = `plan-sheet-sub-row${starter ? ' is-starter' : ''}`;
+      if (starter) {
+        row.innerHTML = `
+          <button type="button" class="plan-sheet-subtodo" title="添加子待办">
+            <span class="plan-sheet-subtodo-box" aria-hidden="true"></span>
+            <span>子待办</span>
+          </button>`;
+        row.querySelector('.plan-sheet-subtodo')?.addEventListener('click', (e) => {
+          e.stopPropagation();
+          activateStarter(row);
+        });
+      } else {
+        row.innerHTML = `
+          <span class="plan-sheet-subtodo-box" aria-hidden="true"></span>
+          <input type="text" class="plan-sheet-sub-input" maxlength="120" placeholder="子待办" autocomplete="off">`;
+        const subInput = row.querySelector('.plan-sheet-sub-input');
+        if (subInput) subInput.value = value;
+        subInput?.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            ensureTrailingStarter();
+            const starterRow = sublist?.querySelector('.plan-sheet-sub-row.is-starter');
+            if (starterRow) activateStarter(starterRow);
+          }
+        });
+      }
+      return row;
+    };
+
+    const ensureTrailingStarter = () => {
+      if (!sublist) return;
+      let starter = sublist.querySelector('.plan-sheet-sub-row.is-starter');
+      if (!starter) {
+        starter = makeSubRow('', { starter: true });
+        sublist.appendChild(starter);
+        return;
+      }
+      sublist.appendChild(starter);
+    };
+
+    const activateStarter = (starterRow) => {
+      if (!sublist || !starterRow) return;
+      const editRow = makeSubRow('', { starter: false });
+      sublist.insertBefore(editRow, starterRow);
+      ensureTrailingStarter();
+      editRow.querySelector('.plan-sheet-sub-input')?.focus();
+    };
+
+    const collectSubtasks = () =>
+      [...(sublist?.querySelectorAll('.plan-sheet-sub-input') || [])]
+        .map((el) => String(el.value || '').trim())
+        .filter(Boolean);
+
+    const insertTagMarker = () => {
+      if (!input) return;
+      const value = String(input.value || '');
+      const start = input.selectionStart ?? value.length;
+      const end = input.selectionEnd ?? value.length;
+      const before = value.slice(0, start);
+      const after = value.slice(end);
+      const needSpace = before.length > 0 && !/\s$/.test(before) && !before.endsWith('#');
+      const insert = `${needSpace ? ' ' : ''}#`;
+      input.value = `${before}${insert}${after}`;
+      const caret = before.length + insert.length;
+      input.setSelectionRange(caret, caret);
+      input.focus();
+    };
+
+    const insertMentionMarker = () => {
+      if (!input) return;
+      const value = String(input.value || '');
+      const start = input.selectionStart ?? value.length;
+      const end = input.selectionEnd ?? value.length;
+      const before = value.slice(0, start);
+      const after = value.slice(end);
+      if (/@$/.test(before) || /(?:^|[\s　])@$/.test(before)) {
+        input.setSelectionRange(before.length, before.length);
+        input.focus();
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        return;
+      }
+      const needSpace = before.length > 0 && !/\s$/.test(before);
+      const insert = `${needSpace ? ' ' : ''}@`;
+      input.value = `${before}${insert}${after}`;
+      const caret = before.length + insert.length;
+      input.setSelectionRange(caret, caret);
+      input.focus();
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+
+    const clearDraft = () => {
+      if (input) input.value = '';
+      if (desc) desc.value = '';
+      applyPriority('none');
+      clearNestParent();
+      if (sublist) {
+        sublist.innerHTML = '';
+        sublist.appendChild(makeSubRow('', { starter: true }));
+      }
+    };
+
+    const submit = () => {
+      const key = this.planSheetKey || Store.currentPlanKey(type);
+      const editId = this.planSheetEditId || sheet.dataset.editId || '';
+      const text = String(input?.value || '').trim();
+      const note = String(desc?.value || '').trim();
+      const children = collectSubtasks();
+      if ((!text || text === '@') && !children.length) {
+        input?.focus();
+        return;
+      }
+      if (text && this.parsePlanMention(input?.value || '')) {
+        input?.focus();
+        return;
+      }
+      const title = text || children.shift() || '';
+      if (!title) {
+        input?.focus();
+        return;
+      }
+      const extra = {
+        note,
+        priority,
+        tags: this.extractPlanTags(title),
+        done: sheetMode === 'done',
+      };
+
+      if (editId) {
+        const originKey = this.planSheetOriginKey || key;
+        const isTop = !Store.findPlanItem(Store.getPlanItems(type, originKey), editId)?.parent;
+        Store.updatePlanItem(type, originKey, editId, {
+          ...extra,
+          children: isTop ? children : undefined,
+          ...(sheetMode === 'done' ? { done: true } : {}),
+        });
+        if (isTop && key !== originKey) {
+          Store.movePlanItemToKey(type, originKey, key, editId);
+        }
+        const found = Store.findPlanItem(Store.getPlanItems(type, key), editId);
+        const currentParentId = found?.parent?.id || null;
+        if (nestParentId && nestParentId !== editId && nestParentId !== currentParentId) {
+          Store.movePlanItemUnder(type, key, editId, nestParentId);
+        } else if (!nestParentId && currentParentId) {
+          Store.promotePlanSubItem(type, key, editId);
+        }
+      } else if (nestParentId && Store.getPlanItems(type, key).some((item) => item.id === nestParentId)) {
+        Store.addPlanSubItem(type, key, nestParentId, title, extra);
+        children.forEach((childText) => {
+          Store.addPlanSubItem(type, key, nestParentId, childText);
+        });
+      } else {
+        Store.addPlanItem(type, key, title, { ...extra, children });
+      }
+      this.planSheetColumn = null;
+      this.planSheetPriority = 'none';
+      this.planSheetParentId = null;
+      this.planSheetEditId = null;
+      this.planSheetOriginKey = null;
+      this.planEditingId = null;
+      this.render();
+    };
+
+    this.bindPlanMentionInput(input, menu, {
+      onSelectItem: (opt) => {
+        const key = this.planSheetKey || Store.currentPlanKey(type);
+        Store.addPlanRefs(type, key, opt.kind, [opt.id]);
+        this.planSheetColumn = null;
+        this.planSheetPriority = 'none';
+        this.planSheetParentId = null;
+        this.planSheetEditId = null;
+        this.planSheetOriginKey = null;
+        this.planEditingId = null;
+        this.render();
+      },
+    });
+
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) this.closePlanSheet();
+    });
+    sheet.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!e.target.closest('.plan-sheet-date-wrap')) closePicker();
+      if (!e.target.closest('.plan-sheet-priority-wrap')) closePriorityMenu();
+      if (!e.target.closest('.plan-sheet-more-wrap')) {
+        closeMoreMenu();
+        closeNestPicker();
+      }
+    });
+
+    sheet.querySelector('.plan-sheet-send')?.addEventListener('click', submit);
+    input?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        if (menu && !menu.classList.contains('hidden')) return;
+        e.preventDefault();
+        submit();
+      }
+    });
+
+    dateBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closePriorityMenu();
+      closeMoreMenu();
+      closeNestPicker();
+      if (!picker) return;
+      const willOpen = picker.classList.contains('hidden');
+      if (willOpen) {
+        paintPicker();
+        picker.classList.remove('hidden');
+      } else {
+        closePicker();
+      }
+    });
+
+    priorityBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closePicker();
+      closeMoreMenu();
+      closeNestPicker();
+      priorityMenu?.classList.toggle('hidden');
+    });
+    priorityMenu?.querySelectorAll('[data-priority]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        applyPriority(btn.dataset.priority);
+      });
+    });
+
+    tagBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeFloating();
+      insertTagMarker();
+    });
+
+    refBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeFloating();
+      insertMentionMarker();
+    });
+
+    moreBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closePicker();
+      closePriorityMenu();
+      closeNestPicker();
+      moreMenu?.classList.toggle('hidden');
+    });
+    moreMenu?.querySelectorAll('[data-sheet-action]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const action = btn.dataset.sheetAction;
+        closeMoreMenu();
+        if (action === 'delete') {
+          const editId = this.planSheetEditId || sheet.dataset.editId || '';
+          const key = this.planSheetOriginKey || this.planSheetKey || Store.currentPlanKey(type);
+          if (editId) {
+            Store.deletePlanItem(type, key, editId);
+            this.closePlanSheet();
+            return;
+          }
+          clearDraft();
+          this.closePlanSheet();
+          return;
+        }
+        if (action === 'to-sub') openNestParentPicker();
+      });
+    });
+
+    sheet.querySelector('.plan-sheet-parent-clear')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      clearNestParent();
+    });
+
+    sublist?.querySelector('.plan-sheet-subtodo')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const starter = e.currentTarget.closest('.plan-sheet-sub-row');
+      activateStarter(starter);
+    });
+
+    sublist?.querySelectorAll('.plan-sheet-sub-input').forEach((subInput) => {
+      subInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          ensureTrailingStarter();
+          const starterRow = sublist.querySelector('.plan-sheet-sub-row.is-starter');
+          if (starterRow) activateStarter(starterRow);
+        }
+      });
+    });
+
+    requestAnimationFrame(() => {
+      input?.focus();
+      if (input && this.planSheetEditId) {
+        const len = input.value.length;
+        input.setSelectionRange(len, len);
+      }
+    });
+  },
+
+  bindTimelineSheet(overlay, sheet) {
+    const type = sheet.dataset.planType || 'daily';
+    const input = sheet.querySelector('.plan-sheet-title');
+    const desc = sheet.querySelector('.plan-sheet-desc');
+    const timeInput = sheet.querySelector('.plan-moment-time-input');
+    const dateBtn = sheet.querySelector('.plan-sheet-date');
+    const picker = sheet.querySelector('.plan-sheet-picker');
+    let pickerViewKey =
+      type === 'daily'
+        ? (this.planSheetKey || Store.currentPlanKey('daily')).slice(0, 7)
+        : type === 'monthly'
+          ? this.planSheetKey || Store.currentPlanKey('monthly')
+          : this.planSheetKey || Store.currentPlanKey('weekly');
+
+    const refreshChip = () => {
+      const key = this.planSheetKey || Store.currentPlanKey(type);
+      sheet.dataset.planKey = key;
+      const text = sheet.querySelector('.plan-sheet-date-text');
+      if (text) text.textContent = Store.planChipLabel(type, key);
+    };
+
+    const closePicker = () => picker?.classList.add('hidden');
+
+    const paintPicker = () => {
+      if (!picker) return;
+      picker.innerHTML = this.renderPlanSheetPicker(
+        type,
+        this.planSheetKey || Store.currentPlanKey(type),
+        pickerViewKey
+      );
+      picker.querySelectorAll('[data-plan-key]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const k = btn.dataset.planKey;
+          if (!k) return;
+          this.planSheetKey = k;
+          refreshChip();
+          closePicker();
+        });
+      });
+      picker.querySelectorAll('[data-picker-month]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const delta = Number(btn.dataset.pickerMonth) || 0;
+          pickerViewKey = Store.shiftPlanKey('monthly', pickerViewKey, delta);
+          paintPicker();
+        });
+      });
+      picker.querySelectorAll('[data-picker-year]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const delta = Number(btn.dataset.pickerYear) || 0;
+          const y = Number(String(pickerViewKey).slice(0, 4)) + delta;
+          const mm = String(pickerViewKey).slice(5, 7) || '01';
+          pickerViewKey = `${y}-${mm}`;
+          paintPicker();
+        });
+      });
+    };
+
+    const submit = () => {
+      const key = this.planSheetKey || Store.currentPlanKey(type);
+      const text = String(input?.value || '').trim();
+      const note = String(desc?.value || '').trim();
+      const time = String(timeInput?.value || '').slice(0, 5);
+      if (!text) {
+        input?.focus();
+        return;
+      }
+      Store.addPlanMoment(type, key, { text, note, time });
+      this.closePlanSheet();
+    };
+
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) this.closePlanSheet();
+    });
+    sheet.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!e.target.closest('.plan-sheet-date-wrap')) closePicker();
+    });
+    dateBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (picker?.classList.contains('hidden')) {
+        paintPicker();
+        picker.classList.remove('hidden');
+      } else closePicker();
+    });
+    sheet.querySelector('.plan-sheet-send')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      submit();
+    });
+    input?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submit();
+      }
+    });
+    requestAnimationFrame(() => input?.focus());
   },
 
   async updateChatLlmStatus() {
@@ -1585,11 +3014,21 @@ const App = {
   },
 
   escapeHtml(str) {
+    if (str == null) return '';
     return String(str)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  },
+
+  /** 左右箭头，与侧栏/打卡周导航同款 */
+  chevronIcon(dir = 'next') {
+    const path =
+      dir === 'prev'
+        ? 'M10.25 3.25L5.75 8l4.5 4.75'
+        : 'M5.75 3.25L10.25 8l-4.5 4.75';
+    return `<svg class="ui-chevron" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path d="${path}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   },
 
   renderModuleIcon(mod, className = 'module-page-icon') {
@@ -1847,12 +3286,12 @@ const App = {
     else set.delete(moduleId);
   },
 
-  renderDept(deptId) {
+  renderDept(deptId, sectionId = null) {
     const dept = getDepartment(deptId);
     if (!dept) return '<div class="empty-state">部门不存在</div>';
 
     if (dept.layout === 'accordion') {
-      return this.renderDeptAccordion(dept);
+      return this.renderDeptAccordion(dept, sectionId || this.route.sectionId || null);
     }
 
     return `
@@ -1876,7 +3315,7 @@ const App = {
   },
 
   renderModuleToolbar(m, dept) {
-    if (m.recordView === 'habitChecklist' || m.recordView === 'weekdayCheckin') return '';
+    if (m.recordView === 'habitChecklist' || isCustomCheckinModule(m)) return '';
     if (m.id === 'sleep') return this.renderSleepToolbar(dept);
     if (m.id === 'study') return this.renderStudyToolbar(dept);
     const sort = Store.getModuleSort(dept.id, m.id);
@@ -2560,7 +3999,7 @@ const App = {
     const hi = 10 * 60;
     const t = Math.max(0, Math.min(1, (mins - lo) / (hi - lo)));
     const alpha = 0.1 + t * 0.38;
-    return `rgba(99, 102, 241, ${alpha.toFixed(3)})`;
+    return `rgba(56, 139, 255, ${alpha.toFixed(3)})`;
   },
 
   renderCalendarWeekSleepOverlay(weekCells, sleepByDate) {
@@ -2747,13 +4186,26 @@ const App = {
   },
 
   formatStudyDurationLabel(mins) {
-    if (mins == null || !Number.isFinite(mins) || mins <= 0) return '—';
+    if (mins == null || !Number.isFinite(mins) || mins < 0) return '—';
     const total = Math.round(mins);
     const h = Math.floor(total / 60);
     const m = total % 60;
+    if (total === 0) return '0 h';
     if (!h) return `${m} min`;
     if (!m) return `${h} h`;
     return `${h} h ${m} min`;
+  },
+
+  /** 日历学习格子：紧凑时长；有记录且为 0 时显示 0h */
+  formatStudyCalendarDuration(mins) {
+    if (mins == null || !Number.isFinite(mins) || mins < 0) return '';
+    const total = Math.round(mins);
+    const h = Math.floor(total / 60);
+    const m = total % 60;
+    if (total === 0) return '0h';
+    if (!h) return `${m}m`;
+    if (!m) return `${h}h`;
+    return `${h}h${String(m).padStart(2, '0')}`;
   },
 
   getStudyViewAnchor() {
@@ -3038,30 +4490,62 @@ const App = {
       </div>`;
   },
 
+  getCheckinWeekKey(deptId, moduleId) {
+    const map = this.checkinWeekByModule || {};
+    const key = `${deptId}.${moduleId}`;
+    const stored = map[key];
+    if (stored && /^\d{4}-W\d{2}$/.test(stored)) return stored;
+    return Store.weekKey();
+  },
+
+  shiftCheckinWeek(deptId, moduleId, delta) {
+    const current = this.getCheckinWeekKey(deptId, moduleId);
+    const next = Store.shiftPlanKey('weekly', current, delta);
+    this.checkinWeekByModule = { ...(this.checkinWeekByModule || {}), [`${deptId}.${moduleId}`]: next };
+  },
+
+  setCheckinWeekByDate(deptId, moduleId, dateStr) {
+    if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return;
+    const next = Store.weekKey(new Date(`${dateStr}T00:00:00`));
+    this.checkinWeekByModule = { ...(this.checkinWeekByModule || {}), [`${deptId}.${moduleId}`]: next };
+  },
+
   renderWeekdayCheckin(deptId, moduleId, mod) {
-    const weekdays = WEEKDAY_LABELS;
-    const weekKey = Store.weekKey();
+    const weekdays = getCheckinDays(mod) || WEEKDAY_LABELS;
+    const weekKey = this.getCheckinWeekKey(deptId, moduleId);
+    const currentWeek = Store.weekKey();
+    const isCurrentWeek = weekKey === currentWeek;
     const record = Store.getWeekCheckinRecord(deptId, moduleId, weekKey);
-    const { done, total } = Store.getWeekdayProgress(record, weekdays);
     const todayLabel = todayWeekdayLabel();
-    const todayDone = Boolean(record?.days?.[todayLabel]);
+    const dayEntries = Store.weekDayEntries(weekKey);
+    const dayMap = Object.fromEntries(dayEntries.map((d) => [d.label, d]));
+    const pickerDate =
+      (isCurrentWeek && dayMap[todayLabel]?.date) || dayEntries[0]?.date || todayStr();
+    const calIcon = `<svg class="checkin-week-cal-svg" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><rect x="3" y="5" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3 10h18" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 3v4M16 3v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`;
 
     return `
-      <div class="weekday-checkin" data-dept="${deptId}" data-module="${moduleId}">
-        <div class="habit-checklist-head">
-          <span class="habit-checklist-date">本周 ${Store.weekRangeLabel(weekKey)}</span>
-          <span class="habit-checklist-progress ${done === total ? 'is-done' : ''}">${done}/${total}${todayDone ? ' · 今日已打卡' : ''}</span>
+      <div class="weekday-checkin custom-checkin" data-dept="${deptId}" data-module="${moduleId}" data-week="${this.escapeHtml(weekKey)}">
+        <div class="habit-checklist-head checkin-week-head">
+          <div class="checkin-week-tools" role="group" aria-label="选择周">
+            <label class="checkin-week-cal" title="选择日期">
+              <input type="date" class="checkin-week-date-input" value="${this.escapeHtml(pickerDate)}" aria-label="选择日期">
+              <span class="checkin-week-cal-btn" aria-hidden="true">${calIcon}</span>
+            </label>
+            <button type="button" class="checkin-week-btn btn-checkin-week-prev" title="上一周" aria-label="上一周">${this.chevronIcon('prev')}</button>
+            <button type="button" class="checkin-week-btn btn-checkin-week-next" title="下一周" aria-label="下一周">${this.chevronIcon('next')}</button>
+          </div>
         </div>
         <div class="weekday-grid">
           ${weekdays
             .map((label) => {
               const checked = Boolean(record?.days?.[label]);
-              const isToday = label === todayLabel;
+              const isToday = isCurrentWeek && label === todayLabel;
+              const md = dayMap[label]?.md || '';
               return `
             <button type="button" class="weekday-btn ${checked ? 'is-done' : ''} ${isToday ? 'is-today' : ''}"
               data-weekday="${label}" title="${checked ? '取消打卡' : '打卡'}">
               <span class="weekday-label">${label}</span>
-              <span class="weekday-mark">${checked ? '✓' : ''}</span>
+              <span class="weekday-date">${this.escapeHtml(md)}</span>
             </button>`;
             })
             .join('')}
@@ -3069,8 +4553,30 @@ const App = {
       </div>`;
   },
 
+  renderDailyCheckin(deptId, moduleId, mod) {
+    const today = todayStr();
+    const checked = Store.isDailyChecked(deptId, moduleId, today);
+    return `
+      <div class="daily-checkin custom-checkin" data-dept="${deptId}" data-module="${moduleId}" data-freq="daily">
+        <div class="habit-checklist-head">
+          <span class="habit-checklist-date">${formatDate(today)} · 每天</span>
+          <span class="habit-checklist-progress ${checked ? 'is-done' : ''}">${checked ? '今日已打卡' : '今日未打卡'}</span>
+        </div>
+        <button type="button" class="daily-checkin-btn ${checked ? 'is-done' : ''}" title="${checked ? '取消打卡' : '打卡'}">
+          <span class="daily-checkin-mark">${checked ? '✓' : ''}</span>
+          <span class="daily-checkin-label">${checked ? '今日已打卡' : '打卡'}</span>
+        </button>
+      </div>`;
+  },
+
+  renderCustomCheckin(deptId, moduleId, mod) {
+    const days = getCheckinDays(mod);
+    if (days == null) return this.renderDailyCheckin(deptId, moduleId, mod);
+    return this.renderWeekdayCheckin(deptId, moduleId, mod);
+  },
+
   renderHabitBody(deptId, moduleId, mod) {
-    if (mod.recordView === 'weekdayCheckin') return this.renderWeekdayCheckin(deptId, moduleId, mod);
+    if (isCustomCheckinModule(mod)) return this.renderCustomCheckin(deptId, moduleId, mod);
     if (mod.recordView === 'habitChecklist') return this.renderHabitChecklist(deptId, moduleId, mod);
     return '';
   },
@@ -3081,20 +4587,34 @@ const App = {
       const done = prog.total > 0 && prog.done === prog.total;
       return { meta: `今日 ${prog.done}/${prog.total}${done ? ' · 已完成' : ''}`, today: done };
     }
-    if (mod.recordView === 'weekdayCheckin') {
-      const prog = Store.getWeekdayProgress(Store.getWeekCheckinRecord(deptId, moduleId), WEEKDAY_LABELS);
-      const today = Store.isWeekdayCheckedToday(deptId, moduleId);
+    if (isCustomCheckinModule(mod)) {
+      const days = getCheckinDays(mod);
+      if (days == null) {
+        const today = Store.isDailyChecked(deptId, moduleId);
+        return { meta: today ? '今日已打卡' : '今日未打卡', today };
+      }
+      const prog = Store.getWeekdayProgress(Store.getWeekCheckinRecord(deptId, moduleId), days);
+      const todayLabel = todayWeekdayLabel();
+      const today = days.includes(todayLabel) && Store.isWeekdayCheckedToday(deptId, moduleId);
       return { meta: `本周 ${prog.done}/${prog.total}${today ? ' · 今日已打卡' : ''}`, today };
     }
     return null;
   },
 
-  renderDeptAccordion(dept) {
+  renderDeptAccordion(dept, sectionId = null) {
     const expandedSet = this.getDeptExpanded(dept.id);
+    const activeSectionId = sectionId || dept.sections?.[0]?.id || null;
+    const section = activeSectionId ? getDeptSection(dept.id, activeSectionId) : null;
+    const modules = section
+      ? getSectionModules(dept.id, section.id)
+      : dept.modules;
+    const sectionTabs =
+      dept.sections?.length ? this.renderLivingSectionTabs(dept, activeSectionId) : '';
 
-    return `
+    const body = `
+      ${sectionTabs}
       <div class="accordion-list">
-        ${dept.modules
+        ${modules
           .map((m) => {
             const mod = getModule(dept.id, m.id);
             const habitMeta = this.habitAccordionMeta(dept.id, m.id, mod);
@@ -3108,18 +4628,40 @@ const App = {
               ? habitMeta.meta
               : `${records.length} 条${today ? ' · 今日已记' : ''}`;
             const expanded = expandedSet.has(m.id);
+            const editBtn =
+              dept.id === 'living'
+                ? `<button type="button" class="btn-edit-module btn-edit-module-living" title="编辑模块"
+                    data-dept="${dept.id}" data-module="${m.id}">编辑</button>`
+                : `<button type="button" class="icon-btn btn-edit-module" title="编辑模块"
+                    data-dept="${dept.id}" data-module="${m.id}">✎</button>`;
+            const collapseBtn =
+              dept.id === 'living'
+                ? `<button type="button" class="chat-collapse-btn accordion-collapse-btn" title="${expanded ? '收起' : '展开'}" aria-expanded="${expanded ? 'true' : 'false'}" data-dept="${dept.id}" data-module="${m.id}">
+                    <span class="chat-collapse-label">${expanded ? '收起' : '展开'}</span>
+                    <span class="chat-collapse-chevron" aria-hidden="true">${expanded ? '‹' : '›'}</span>
+                  </button>`
+                : '';
+            const headerInner =
+              dept.id === 'living'
+                ? `<span class="accordion-icon">${mod.icon}</span>
+                    <span class="accordion-living-text">
+                      <span class="accordion-title">${this.escapeHtml(mod.name)}</span>
+                      <span class="accordion-desc">${this.escapeHtml(mod.desc || '')}</span>
+                    </span>
+                    <span class="accordion-meta">${meta}</span>`
+                : `<span class="accordion-icon">${mod.icon}</span>
+                    <span class="accordion-title">${this.escapeHtml(mod.name)}</span>
+                    <span class="accordion-desc">${this.escapeHtml(mod.desc || '')}</span>
+                    <span class="accordion-meta">${meta}</span>
+                    <span class="accordion-chevron">›</span>`;
             return `
               <div class="accordion-item ${expanded ? 'expanded' : ''}" data-dept="${dept.id}" data-module="${m.id}">
-                <div class="accordion-header-row">
-                  <button type="button" class="accordion-header" style="--accent:${dept.color}">
-                    <span class="accordion-icon">${mod.icon}</span>
-                    <span class="accordion-title">${this.escapeHtml(mod.name)}</span>
-                    <span class="accordion-desc">${this.escapeHtml(mod.desc)}</span>
-                    <span class="accordion-meta">${meta}</span>
-                    <span class="accordion-chevron">›</span>
+                <div class="accordion-header-row${dept.id === 'living' ? ' accordion-header-row-living' : ''}">
+                  <button type="button" class="accordion-header${dept.id === 'living' ? ' accordion-header-living' : ''}" style="--accent:${dept.color}">
+                    ${headerInner}
                   </button>
-                  <button type="button" class="icon-btn btn-edit-module" title="编辑模块"
-                    data-dept="${dept.id}" data-module="${m.id}">✎</button>
+                  ${collapseBtn}
+                  ${editBtn}
                 </div>
                 <div class="accordion-body">
                   ${
@@ -3145,7 +4687,23 @@ const App = {
           })
           .join('')}
       </div>
+      ${
+        dept.id === 'living' && activeSectionId
+          ? `<button type="button" class="living-add-card btn-add-living-module" data-dept="${dept.id}" data-section="${activeSectionId}">
+              <span class="living-add-card-plus" aria-hidden="true">+</span>
+              <span class="living-add-card-text">
+                <span class="living-add-card-title">新增打卡</span>
+                <span class="living-add-card-desc">自定义名称、频率与描述</span>
+              </span>
+            </button>`
+          : ''
+      }
     `;
+
+    if (dept.id === 'living') {
+      return `<div class="living-workspace">${body}</div>`;
+    }
+    return body;
   },
 
   updateInterviewWidget(show) {
@@ -3222,6 +4780,28 @@ const App = {
 
     update();
     this.interviewCountdownTimer = setInterval(update, 1000);
+  },
+
+  renderLivingSectionTabs(dept, activeSectionId) {
+    if (!dept?.sections?.length) return '';
+    return `
+      <nav class="module-tabs living-section-tabs" aria-label="${this.escapeHtml(dept.name)}板块">
+        ${dept.sections
+          .map((sec) => {
+            const active = sec.id === activeSectionId;
+            const mods = getSectionModules(dept.id, sec.id);
+            const count = mods.reduce((sum, m) => sum + Store.getRecords(dept.id, m.id).length, 0);
+            return `
+              <button type="button" class="module-tab ${active ? 'active' : ''}"
+                data-dept="${dept.id}" data-section="${sec.id}"
+                style="--tab-accent:${dept.color}">
+                <span class="module-tab-icon">${sec.icon || '•'}</span>
+                <span class="module-tab-label">${this.escapeHtml(sec.name)}</span>
+                ${count ? `<span class="module-tab-count">${count}</span>` : ''}
+              </button>`;
+          })
+          .join('')}
+      </nav>`;
   },
 
   renderModuleTabs(dept, activeModuleId) {
@@ -6288,7 +7868,7 @@ const App = {
       return this.renderProjectPage(deptId, moduleId, mod, dept);
     }
 
-    if (mod.recordView === 'habitChecklist' || mod.recordView === 'weekdayCheckin') {
+    if (mod.recordView === 'habitChecklist' || isCustomCheckinModule(mod)) {
       const nav =
         dept.layout === 'pages'
           ? this.renderModuleTabs(dept, moduleId)
@@ -6742,6 +8322,10 @@ const App = {
     return `${month + 1}月`;
   },
 
+  formatCalendarPeriodLabel(year, month) {
+    return `${year}年 ${month + 1}月`;
+  },
+
   formatCalendarRangeLabel(start, end) {
     if (!start) return '';
     if (!end || start === end) return start;
@@ -6797,8 +8381,8 @@ const App = {
     const renderStudyCellBody = (dateStr) => {
       if (themeId !== 'study') return '';
       const info = studyByDate?.get(dateStr);
-      if (!info?.totalMins) return '';
-      const dur = this.formatSleepDurationCompact(info.totalMins);
+      if (!info?.count) return '';
+      const dur = this.formatStudyCalendarDuration(info.totalMins);
       if (!dur) return '';
       return `<span class="year-cal-study-dur" title="学习 ${this.escapeHtml(dur)}">${this.escapeHtml(dur)}</span>`;
     };
@@ -6858,7 +8442,7 @@ const App = {
             isToday ? 'is-today' : '',
             showCalendarEvents && dayTasks.length ? 'has-tasks' : '',
             showCalendarEvents && hasSubs ? 'has-subs' : '',
-            themeId === 'study' && studyByDate?.get(cell.dateStr)?.totalMins
+            themeId === 'study' && studyByDate?.get(cell.dateStr)?.count
               ? 'has-theme-mark is-study-day'
               : '',
             themeId === 'sleep' && sleepInfo?.count ? 'has-theme-mark is-sleep-day' : '',
@@ -6898,7 +8482,6 @@ const App = {
             const canDown = index < dayTasks.length - 1;
             const daySubs = Store.getCalendarSubsOnDate(task, viewDate);
             const isRange = task.startDate !== task.endDate;
-            const hasSubs = (task.subs || []).length > 0;
             const subList = daySubs.length
               ? `<ul class="year-cal-sub-list">
                   ${daySubs
@@ -6926,9 +8509,7 @@ const App = {
                       : ''
                   }
                   <div class="year-cal-task-main">
-                    <span class="year-cal-task-text">${this.escapeHtml(task.text)}${
-                      hasSubs ? `<span class="year-cal-task-subcount">${task.subs.length} 记</span>` : ''
-                    }</span>
+                    <span class="year-cal-task-text">${this.escapeHtml(task.text)}</span>
                     <span class="year-cal-task-range">${this.escapeHtml(range)}</span>
                   </div>
                   <span class="year-cal-task-reorder">
@@ -6948,11 +8529,9 @@ const App = {
       ? monthTasks
           .map((task) => {
             const range = this.formatCalendarTaskRange(task);
-            const kindLabel = this.calendarItemKindLabel(task.kind);
-            const subCount = (task.subs || []).length;
             return `
-              <li class="year-cal-month-task ${task.done ? 'is-done' : ''} kind-${task.kind || 'task'}" data-task-id="${task.id}" data-jump-date="${task.startDate}" style="${this.calendarItemStyle(task)}">
-                <span class="year-cal-month-task-range">${this.escapeHtml(range)} · ${kindLabel}${subCount ? ` · ${subCount} 记` : ''}</span>
+              <li class="year-cal-month-task ${task.done ? 'is-done' : ''} ${this.calendarFocusTaskId === task.id ? 'is-selected' : ''} kind-${task.kind || 'task'}" data-task-id="${task.id}" data-jump-date="${task.startDate}" style="${this.calendarItemStyle(task)}">
+                <span class="year-cal-month-task-range">${this.escapeHtml(range)}</span>
                 <span class="year-cal-month-task-text">${this.escapeHtml(task.text)}</span>
               </li>`;
           })
@@ -7012,7 +8591,9 @@ const App = {
                 if (!sleepList.length) {
                   return `<div class="year-cal-theme-day-hint">这一天还没有学习记录</div>`;
                 }
-                const dur = this.formatSleepDurationFromMinutes(info?.totalMins);
+                const dur = this.formatStudyDurationLabel(
+                  info?.totalMins != null ? info.totalMins : 0
+                );
                 const rows = sleepList
                   .map((r) => {
                     const one = this.formatStudyDurationLabel(this.calcStudyDurationMins(r));
@@ -7021,13 +8602,13 @@ const App = {
                   })
                   .join('');
                 return `
-                  <div class="year-cal-theme-day-hint">总时长 ${this.escapeHtml(dur || '—')}</div>
+                  <div class="year-cal-theme-day-hint">总时长 ${this.escapeHtml(dur)}</div>
                   <ul class="year-cal-sleep-record-list">${rows}</ul>`;
               })()
             : '';
 
     const monthPanelHead =
-      themeId === 'summary' ? '月度事项' : `月度 · ${themeMeta.name}`;
+      themeId === 'summary' ? '月度 · 事项' : `月度 · ${themeMeta.name}`;
     const dayPanelTasks =
       themeId === 'summary'
         ? `<ul class="year-cal-task-list">${taskList}</ul>`
@@ -7038,10 +8619,20 @@ const App = {
     return `
       <section class="year-calendar mode-${this.escapeHtml(themeId)}" data-year="${year}" data-month="${month}" data-theme="${this.escapeHtml(themeId)}">
         <div class="year-cal-head">
-          <div class="year-cal-year-switch">
-            <button type="button" class="btn btn-ghost btn-sm btn-year-cal-year-prev" title="上一年">‹</button>
-            <span class="year-cal-title">${this.formatCalendarYearLabel(year)}</span>
-            <button type="button" class="btn btn-ghost btn-sm btn-year-cal-year-next" title="下一年">›</button>
+          <div class="year-cal-head-left">
+            <div class="year-cal-period-switch">
+              <button type="button" class="year-cal-period-arrow btn-year-cal-prev" title="上个月">‹</button>
+              <span class="year-cal-period-label">${this.escapeHtml(this.formatCalendarPeriodLabel(year, month))}</span>
+              <button type="button" class="year-cal-period-arrow btn-year-cal-next" title="下个月">›</button>
+            </div>
+            <button type="button" class="btn-year-cal-today" title="回到今天">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3.5" y="5" width="17" height="15" rx="2.5"></rect>
+                <path d="M8 3.5v3M16 3.5v3M3.5 9.5h17"></path>
+                <path d="M9.2 14.2l2 2 3.8-4"></path>
+              </svg>
+              <span>回到今天</span>
+            </button>
           </div>
           <div class="year-cal-head-actions">
             <div class="year-cal-theme-wrap">
@@ -7054,7 +8645,11 @@ const App = {
               </div>
             </div>
             <div class="year-cal-create-wrap">
-              <button type="button" class="btn btn-primary btn-sm btn-year-cal-create" title="新增事项" aria-haspopup="true" aria-expanded="false">+</button>
+              <button type="button" class="btn btn-sm btn-year-cal-create" title="新增事项" aria-haspopup="true" aria-expanded="false" aria-label="新增事项">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+                  <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+                </svg>
+              </button>
               <div class="year-cal-create-menu hidden" role="menu">
                 <button type="button" class="year-cal-create-option" data-kind="task" role="menuitem">新增任务</button>
                 <button type="button" class="year-cal-create-option" data-kind="schedule" role="menuitem">新增日程</button>
@@ -7064,11 +8659,6 @@ const App = {
         </div>
         <div class="year-cal-body">
           <aside class="year-cal-side">
-            <div class="year-cal-nav">
-              <button type="button" class="btn btn-ghost btn-sm btn-year-cal-prev" title="上个月">‹</button>
-              <span class="year-cal-month-label">${this.formatCalendarMonthLabel(month)}</span>
-              <button type="button" class="btn btn-ghost btn-sm btn-year-cal-next" title="下个月">›</button>
-            </div>
             <div class="year-cal-month-panel">
               <div class="year-cal-month-panel-head">${this.escapeHtml(monthPanelHead)}</div>
               <ul class="year-cal-month-task-list">${
@@ -7111,25 +8701,12 @@ const App = {
       }
       this.calendarYear = y;
       this.calendarMonth = m;
-      this.render();
-    };
-
-    const setYear = (year) => {
-      this.calendarYear = Math.max(1970, Math.min(2100, year));
       const day = String(this.calendarViewDate || '').slice(8, 10) || '01';
-      const month = this.calendarMonth ?? 0;
-      const last = new Date(this.calendarYear, month + 1, 0).getDate();
+      const last = new Date(y, m + 1, 0).getDate();
       const d = Math.min(Number(day) || 1, last);
-      this.calendarViewDate = `${this.calendarYear}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      this.calendarViewDate = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
       this.render();
     };
-
-    root.querySelector('.btn-year-cal-year-prev')?.addEventListener('click', () => {
-      setYear((this.calendarYear ?? new Date().getFullYear()) - 1);
-    });
-    root.querySelector('.btn-year-cal-year-next')?.addEventListener('click', () => {
-      setYear((this.calendarYear ?? new Date().getFullYear()) + 1);
-    });
 
     root.querySelector('.btn-year-cal-theme')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -7167,6 +8744,11 @@ const App = {
     });
     root.querySelector('.btn-year-cal-next')?.addEventListener('click', () => {
       setMonth((this.calendarMonth ?? 0) + 1);
+    });
+
+    root.querySelector('.btn-year-cal-today')?.addEventListener('click', () => {
+      this.setCalendarToDate(todayStr());
+      this.render();
     });
 
     root.querySelector('.btn-year-cal-create')?.addEventListener('click', (e) => {
@@ -7208,6 +8790,7 @@ const App = {
       btn.addEventListener('click', () => {
         const date = btn.dataset.date;
         if (!date) return;
+        this.calendarFocusTaskId = null;
         this.setCalendarToDate(date);
         this.render();
       });
@@ -7216,7 +8799,9 @@ const App = {
     root.querySelectorAll('.year-cal-month-task[data-jump-date]').forEach((el) => {
       el.addEventListener('click', () => {
         const date = el.dataset.jumpDate;
+        const taskId = el.dataset.taskId || null;
         if (!date) return;
+        this.calendarFocusTaskId = taskId;
         this.setCalendarToDate(date);
         this.render();
       });
@@ -7304,7 +8889,7 @@ const App = {
       <div class="year-cal-help-guide">
         <ol>
           <li><strong>切换年份</strong>：点击标题两侧 ‹ ›，显示为「xxxx年」。</li>
-          <li><strong>切换月份</strong>：点击左侧 ‹ ›，显示为「xx月」；下方展示本月计划，点击可跳到对应日期。</li>
+          <li><strong>切换月份</strong>：点击左侧 ‹ ›，显示为「xx月」；下方展示本月待办，点击可跳到对应日期。</li>
           <li><strong>查看某天事项</strong>：点击日历上的某一天，下方会显示该日事项（任务与日程）。</li>
           <li><strong>新增事项</strong>：点右上角「+」，选择「新增任务」或「新增日程」，可自定义高亮颜色。</li>
           <li><strong>跨天事项</strong>：开始与结束日期不同时，日历上会以连续色条高亮；标题在色条中居中显示一次。</li>
@@ -7736,24 +9321,25 @@ const App = {
   },
 
   calendarItemDefaultColor(kind) {
-    return kind === 'schedule' ? '#3B82F6' : '#F59E0B';
+    return kind === 'schedule' ? '#388BFF' : '#5B9EFF';
   },
 
   calendarColorPresets() {
-    return ['#F59E0B', '#3B82F6', '#10B981', '#8B5CF6', '#F43F5E', '#0D9488', '#64748B', '#EC4899'];
+    // 参考数据看板：蓝主色 + 粉点缀 + 灰阶，不用橙/绿
+    return ['#388BFF', '#5B9EFF', '#69B1FF', '#94BFFF', '#FF6B8A', '#FF8FA3', '#8A8F99', '#595959'];
   },
 
   hexToRgba(hex, alpha = 0.45) {
     const normalized = Store.normalizeCalendarItemColor(hex);
     const m = normalized.match(/^#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})$/i);
-    if (!m) return `rgba(245, 158, 11, ${alpha})`;
+    if (!m) return `rgba(56, 139, 255, ${alpha})`;
     return `rgba(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}, ${alpha})`;
   },
 
   darkenHex(hex, amount = 0.45) {
     const normalized = Store.normalizeCalendarItemColor(hex);
     const m = normalized.match(/^#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})$/i);
-    if (!m) return '#78350F';
+    if (!m) return '#1677FF';
     const channel = (v) => Math.max(0, Math.round(parseInt(v, 16) * (1 - amount)));
     const toHex = (n) => n.toString(16).padStart(2, '0');
     return `#${toHex(channel(m[1]))}${toHex(channel(m[2]))}${toHex(channel(m[3]))}`;
@@ -7996,12 +9582,7 @@ const App = {
 
     document.querySelectorAll('.dept-card').forEach((el) => {
       el.addEventListener('click', () => {
-        const dept = getDepartment(el.dataset.dept);
-        if (dept?.layout === 'pages' && dept.modules[0]) {
-          this.navigate('module', { deptId: dept.id, moduleId: dept.modules[0].id });
-        } else {
-          this.navigate('dept', { deptId: el.dataset.dept });
-        }
+        this.navigateToDept(el.dataset.dept);
       });
     });
   },
@@ -8023,19 +9604,68 @@ const App = {
   bindDeptAccordion(deptId) {
     const expandedSet = this.getDeptExpanded(deptId);
 
-    document.querySelectorAll('.accordion-header').forEach((btn) => {
+    document.querySelectorAll('.living-section-tabs .module-tab[data-section]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        const item = btn.closest('.accordion-item');
-        const moduleId = item.dataset.module;
-        if (expandedSet.has(moduleId)) {
-          expandedSet.delete(moduleId);
-          item.classList.remove('expanded');
-        } else {
-          expandedSet.add(moduleId);
-          item.classList.add('expanded');
-        }
+        const sectionId = btn.dataset.section;
+        if (!sectionId || sectionId === this.route.sectionId) return;
+        this.navigateToSection(btn.dataset.dept || deptId, sectionId);
       });
     });
+
+    document.querySelectorAll('.btn-add-living-module').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.openCreateLivingModuleModal(btn.dataset.dept || deptId, btn.dataset.section);
+      });
+    });
+
+    const toggleItem = (item) => {
+      if (!item) return;
+      const moduleId = item.dataset.module;
+      if (expandedSet.has(moduleId)) {
+        expandedSet.delete(moduleId);
+        item.classList.remove('expanded');
+      } else {
+        expandedSet.add(moduleId);
+        item.classList.add('expanded');
+      }
+      // 同步生活模块展开按钮文案
+      const collapseBtn = item.querySelector('.accordion-collapse-btn');
+      if (collapseBtn) {
+        const open = item.classList.contains('expanded');
+        collapseBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        collapseBtn.title = open ? '收起' : '展开';
+        const label = collapseBtn.querySelector('.chat-collapse-label');
+        const chevron = collapseBtn.querySelector('.chat-collapse-chevron');
+        if (label) label.textContent = open ? '收起' : '展开';
+        if (chevron) chevron.textContent = open ? '‹' : '›';
+      }
+    };
+
+    document.querySelectorAll('.accordion-header').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        toggleItem(btn.closest('.accordion-item'));
+      });
+    });
+
+    document.querySelectorAll('.accordion-collapse-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleItem(btn.closest('.accordion-item'));
+      });
+    });
+
+    if (this._scrollToAccordionModule) {
+      const target = document.querySelector(
+        `.accordion-item[data-dept="${deptId}"][data-module="${this._scrollToAccordionModule}"]`
+      );
+      this._scrollToAccordionModule = null;
+      if (target) {
+        requestAnimationFrame(() => {
+          target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        });
+      }
+    }
 
     document.querySelectorAll('.btn-add-record').forEach((btn) => {
       btn.addEventListener('click', (e) => {
@@ -8064,6 +9694,7 @@ const App = {
     this.bindStudyViews('.accordion-list');
     this.bindHabitChecklist();
     this.bindWeekdayCheckin();
+    this.bindDailyCheckin();
   },
 
   bindHabitChecklist() {
@@ -8089,15 +9720,49 @@ const App = {
     document.querySelectorAll('.weekday-checkin').forEach((panel) => {
       const deptId = panel.dataset.dept;
       const moduleId = panel.dataset.module;
+      const weekKey = panel.dataset.week || this.getCheckinWeekKey(deptId, moduleId);
+      const mod = getModule(deptId, moduleId);
+      const days = getCheckinDays(mod) || WEEKDAY_LABELS;
+
+      panel.querySelector('.btn-checkin-week-prev')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.shiftCheckinWeek(deptId, moduleId, -1);
+        this.render();
+      });
+      panel.querySelector('.btn-checkin-week-next')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.shiftCheckinWeek(deptId, moduleId, 1);
+        this.render();
+      });
+      panel.querySelector('.checkin-week-date-input')?.addEventListener('click', (e) => e.stopPropagation());
+      panel.querySelector('.checkin-week-date-input')?.addEventListener('change', (e) => {
+        e.stopPropagation();
+        const value = e.target.value;
+        if (!value) return;
+        this.setCheckinWeekByDate(deptId, moduleId, value);
+        this.render();
+      });
 
       panel.querySelectorAll('.weekday-btn').forEach((btn) => {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
           const day = btn.dataset.weekday;
           if (!day) return;
-          Store.toggleWeekdayCheck(deptId, moduleId, day, WEEKDAY_LABELS);
+          Store.toggleWeekdayCheck(deptId, moduleId, day, days, weekKey);
           this.render();
         });
+      });
+    });
+  },
+
+  bindDailyCheckin() {
+    document.querySelectorAll('.daily-checkin').forEach((panel) => {
+      const deptId = panel.dataset.dept;
+      const moduleId = panel.dataset.module;
+      panel.querySelector('.daily-checkin-btn')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        Store.toggleDailyCheck(deptId, moduleId);
+        this.render();
       });
     });
   },
@@ -8135,7 +9800,7 @@ const App = {
       return;
     }
 
-    if (mod?.recordView === 'habitChecklist' || mod?.recordView === 'weekdayCheckin') {
+    if (mod?.recordView === 'habitChecklist' || isCustomCheckinModule(mod)) {
       document.querySelector('[data-back-dept]')?.addEventListener('click', (e) => {
         this.navigate('dept', { deptId: e.target.dataset.backDept });
       });
@@ -8147,6 +9812,7 @@ const App = {
       });
       this.bindHabitChecklist();
       this.bindWeekdayCheckin();
+      this.bindDailyCheckin();
       return;
     }
 
@@ -8381,7 +10047,7 @@ const App = {
   openModal(deptId, moduleId, existingData = null, options = {}) {
     const mod = getModule(deptId, moduleId);
     if (!mod) return;
-    if (mod.recordView === 'habitChecklist' || mod.recordView === 'weekdayCheckin') return;
+    if (mod.recordView === 'habitChecklist' || isCustomCheckinModule(mod)) return;
 
     this._sleepModalOptions = options || {};
     this.resetModalFooter();
@@ -8685,16 +10351,102 @@ const App = {
     document.getElementById('modalOverlay').classList.remove('hidden');
   },
 
+  openCreateLivingModuleModal(deptId, sectionId) {
+    const dept = getDepartment(deptId);
+    const section = getDeptSection(deptId, sectionId);
+    if (!dept || !section) return;
+
+    document.getElementById('modalTitle').textContent = `新增打卡 · ${section.name}`;
+    const form = document.getElementById('recordForm');
+    form.innerHTML = `
+      <div class="form-group">
+        <label>打卡名称</label>
+        <input type="text" id="moduleNameInput" maxlength="12" required placeholder="如 洗头、敷眼膜">
+      </div>
+      <div class="form-group">
+        <label>图标（emoji）</label>
+        <input type="text" id="moduleIconInput" maxlength="4" placeholder="✅" value="✅">
+      </div>
+      <div class="form-group">
+        <label>描述</label>
+        <input type="text" id="moduleDescInput" maxlength="40" placeholder="简短说明">
+      </div>
+      <div class="form-group">
+        <label>打卡频率</label>
+        <select id="moduleCheckinFreq">
+          ${CHECKIN_FREQ_OPTIONS.map(
+            (o) => `<option value="${o.id}" ${o.id === 'weekly' ? 'selected' : ''}>${this.escapeHtml(o.label)}</option>`
+          ).join('')}
+        </select>
+      </div>
+      <div class="form-group hidden" id="moduleCheckinDaysGroup">
+        <label>自定义星期</label>
+        <div class="checkin-days-picker" id="moduleCheckinDays">
+          ${WEEKDAY_LABELS.map(
+            (d) => `
+            <label class="checkin-day-chip">
+              <input type="checkbox" value="${d}" checked>
+              <span>${d}</span>
+            </label>`
+          ).join('')}
+        </div>
+      </div>
+      <p class="settings-hint">将添加到「${this.escapeHtml(section.name)}」板块。</p>
+    `;
+
+    const freqSelect = document.getElementById('moduleCheckinFreq');
+    const syncDaysGroup = () => {
+      document.getElementById('moduleCheckinDaysGroup')?.classList.toggle(
+        'hidden',
+        freqSelect?.value !== 'custom'
+      );
+    };
+    freqSelect?.addEventListener('change', syncDaysGroup);
+
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      const name = document.getElementById('moduleNameInput').value.trim();
+      const icon = document.getElementById('moduleIconInput').value.trim() || '✅';
+      const desc = document.getElementById('moduleDescInput').value.trim();
+      const checkinFreq = freqSelect?.value || 'weekly';
+      if (!name) return;
+      const payload = { sectionId: section.id, name, icon, desc, checkinFreq };
+      if (checkinFreq === 'custom') {
+        const days = [...document.querySelectorAll('#moduleCheckinDays input:checked')].map(
+          (el) => el.value
+        );
+        payload.checkinDays = days.length ? days : [...WEEKDAY_LABELS];
+      }
+      const created = Store.addCustomLivingModule(payload);
+      this.setDeptExpanded(deptId, created.id, true);
+      this._scrollToAccordionModule = created.id;
+      this.closeModal();
+      this.navigate('dept', { deptId, sectionId: section.id });
+    };
+
+    document.getElementById('modalOverlay').classList.remove('hidden');
+    document.getElementById('moduleNameInput')?.focus();
+  },
+
   openModuleEditModal(deptId, moduleId) {
     const mod = getModule(deptId, moduleId);
     const defaults = getModuleDefaults(deptId, moduleId);
     if (!mod || !defaults) return;
 
-    document.getElementById('modalTitle').textContent = `${mod.icon} 编辑模块`;
+    const isCheckin = isCustomCheckinModule(mod);
+    const isCustom = Boolean(mod.custom);
+    const freq = mod.checkinFreq || defaults.checkinFreq || 'weekly';
+    const selectedDays = Array.isArray(mod.checkinDays) && mod.checkinDays.length
+      ? mod.checkinDays
+      : WEEKDAY_LABELS;
+
+    document.getElementById('modalTitle').textContent = isCheckin
+      ? `${mod.icon} 编辑自定义打卡`
+      : `${mod.icon} 编辑模块`;
     const form = document.getElementById('recordForm');
     form.innerHTML = `
       <div class="form-group">
-        <label>名称</label>
+        <label>打卡名称</label>
         <input type="text" id="moduleNameInput" maxlength="12" required>
       </div>
       <div class="form-group">
@@ -8705,22 +10457,70 @@ const App = {
         <label>描述</label>
         <input type="text" id="moduleDescInput" maxlength="40" placeholder="简短说明">
       </div>
-      <p class="settings-hint">修改保存在本地，可随时恢复默认。</p>
+      ${
+        isCheckin
+          ? `
+      <div class="form-group">
+        <label>打卡频率</label>
+        <select id="moduleCheckinFreq">
+          ${CHECKIN_FREQ_OPTIONS.map(
+            (o) => `<option value="${o.id}">${this.escapeHtml(o.label)}</option>`
+          ).join('')}
+        </select>
+      </div>
+      <div class="form-group ${freq === 'custom' ? '' : 'hidden'}" id="moduleCheckinDaysGroup">
+        <label>自定义星期</label>
+        <div class="checkin-days-picker" id="moduleCheckinDays">
+          ${WEEKDAY_LABELS.map(
+            (d) => `
+            <label class="checkin-day-chip">
+              <input type="checkbox" value="${d}" ${selectedDays.includes(d) ? 'checked' : ''}>
+              <span>${d}</span>
+            </label>`
+          ).join('')}
+        </div>
+      </div>`
+          : ''
+      }
+      <p class="settings-hint">${isCheckin || isCustom ? '删除后打卡记录也会被清除。' : '修改保存在本地，可随时恢复默认。'}</p>
       <div class="form-delete-zone" style="margin-top:16px;padding-top:16px">
-        <button type="button" class="btn btn-danger-ghost" id="btnResetModuleMeta">恢复默认</button>
+        ${
+          isCheckin || isCustom
+            ? `<button type="button" class="btn btn-danger-ghost" id="btnDeleteLivingModule">删除</button>`
+            : `<button type="button" class="btn btn-danger-ghost" id="btnResetModuleMeta">恢复默认</button>`
+        }
       </div>
     `;
 
-    document.getElementById('moduleNameInput').value = mod.name;
-    document.getElementById('moduleIconInput').value = mod.icon;
-    document.getElementById('moduleDescInput').value = mod.desc;
+    document.getElementById('moduleNameInput').value = mod.name || '';
+    document.getElementById('moduleIconInput').value = mod.icon || '';
+    document.getElementById('moduleDescInput').value = mod.desc || '';
+    const freqSelect = document.getElementById('moduleCheckinFreq');
+    if (freqSelect) freqSelect.value = freq;
 
-    document.getElementById('btnResetModuleMeta').addEventListener('click', () => {
-      if (confirm('恢复该模块的默认名称、图标和描述？')) {
+    const syncDaysGroup = () => {
+      const group = document.getElementById('moduleCheckinDaysGroup');
+      if (!group || !freqSelect) return;
+      group.classList.toggle('hidden', freqSelect.value !== 'custom');
+    };
+    freqSelect?.addEventListener('change', syncDaysGroup);
+    syncDaysGroup();
+
+    document.getElementById('btnResetModuleMeta')?.addEventListener('click', () => {
+      if (confirm(isCheckin ? '恢复该打卡的默认名称、图标、描述和频率？' : '恢复该模块的默认名称、图标和描述？')) {
         Store.resetModuleMeta(deptId, moduleId);
         this.closeModal();
         this.render();
       }
+    });
+
+    document.getElementById('btnDeleteLivingModule')?.addEventListener('click', async () => {
+      const ok = await this.confirmDelete('确定删除这个打卡吗？相关打卡记录也会被清除。', '删除');
+      if (!ok) return;
+      if (isCustom) Store.deleteCustomLivingModule(moduleId);
+      else Store.hideLivingModule(moduleId);
+      this.closeModal();
+      this.render();
     });
 
     form.onsubmit = (e) => {
@@ -8730,10 +10530,32 @@ const App = {
       const desc = document.getElementById('moduleDescInput').value.trim();
       if (!name) return;
 
-      if (name === defaults.name && icon === defaults.icon && desc === defaults.desc) {
-        Store.resetModuleMeta(deptId, moduleId);
+      const payload = { name, icon, desc };
+      if (isCheckin) {
+        const nextFreq = freqSelect?.value || 'weekly';
+        payload.checkinFreq = nextFreq;
+        if (nextFreq === 'custom') {
+          const days = [...document.querySelectorAll('#moduleCheckinDays input:checked')].map(
+            (el) => el.value
+          );
+          payload.checkinDays = days.length ? days : [...WEEKDAY_LABELS];
+        } else {
+          payload.checkinDays = '';
+        }
+      }
+
+      if (isCustom) {
+        Store.updateCustomLivingModule(moduleId, payload);
       } else {
-        Store.saveModuleMeta(deptId, moduleId, { name, icon, desc });
+        const sameName = name === defaults.name && icon === defaults.icon && desc === defaults.desc;
+        const sameFreq =
+          !isCheckin ||
+          ((payload.checkinFreq || 'weekly') === (defaults.checkinFreq || 'weekly') &&
+            (payload.checkinFreq !== 'custom' ||
+              JSON.stringify(payload.checkinDays || []) ===
+                JSON.stringify(defaults.checkinDays || WEEKDAY_LABELS)));
+        if (sameName && sameFreq) Store.resetModuleMeta(deptId, moduleId);
+        else Store.saveModuleMeta(deptId, moduleId, payload);
       }
       this.closeModal();
       this.render();

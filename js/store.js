@@ -193,6 +193,23 @@ const Store = {
       data.settings.customBaguBanks = [];
       changed = true;
     }
+    // 部门名：「施工ing」→「🚧 施工中」
+    if (data.settings.deptMeta && typeof data.settings.deptMeta === 'object') {
+      const deptMeta = { ...data.settings.deptMeta };
+      let metaChanged = false;
+      for (const [deptId, meta] of Object.entries(deptMeta)) {
+        if (!meta || typeof meta.name !== 'string' || !meta.name.includes('施工ing')) continue;
+        deptMeta[deptId] = {
+          ...meta,
+          name: meta.name.replace(/施工ing/g, '🚧 施工中'),
+        };
+        metaChanged = true;
+      }
+      if (metaChanged) {
+        data.settings = { ...data.settings, deptMeta };
+        changed = true;
+      }
+    }
     if (typeof this._purgeExpiredRecycleBin === 'function') {
       if (this._purgeExpiredRecycleBin(data)) {
         changed = true;
@@ -786,19 +803,19 @@ const Store = {
     );
   },
 
-  toggleWeekdayCheck(deptId, moduleId, dayLabel, weekdays = WEEKDAY_LABELS) {
-    const weekKey = this.weekKey();
-    let record = this.getWeekCheckinRecord(deptId, moduleId, weekKey);
+  toggleWeekdayCheck(deptId, moduleId, dayLabel, weekdays = WEEKDAY_LABELS, weekKey = this.weekKey()) {
+    const key = weekKey || this.weekKey();
+    let record = this.getWeekCheckinRecord(deptId, moduleId, key);
     if (!record) {
       const days = {};
       weekdays.forEach((d) => {
         days[d] = d === dayLabel;
       });
-      return this.addRecord(deptId, moduleId, { date: weekKey, weekKey, days });
+      return this.addRecord(deptId, moduleId, { date: key, weekKey: key, days });
     }
     const days = { ...(record.days || {}) };
     days[dayLabel] = !days[dayLabel];
-    return this.updateRecord(deptId, moduleId, record.id, { days, weekKey });
+    return this.updateRecord(deptId, moduleId, record.id, { days, weekKey: key });
   },
 
   getWeekdayProgress(record, weekdays = WEEKDAY_LABELS) {
@@ -811,6 +828,26 @@ const Store = {
     const label = todayWeekdayLabel();
     const record = this.getWeekCheckinRecord(deptId, moduleId);
     return Boolean(record?.days?.[label]);
+  },
+
+  getDailyCheckinRecord(deptId, moduleId, date = todayStr()) {
+    return (
+      this.getRawRecords(deptId, moduleId).find(
+        (r) => String(r.date || '').slice(0, 10) === date && !r.weekKey && r.days == null
+      ) || null
+    );
+  },
+
+  isDailyChecked(deptId, moduleId, date = todayStr()) {
+    return Boolean(this.getDailyCheckinRecord(deptId, moduleId, date)?.checked);
+  },
+
+  toggleDailyCheck(deptId, moduleId, date = todayStr()) {
+    let record = this.getDailyCheckinRecord(deptId, moduleId, date);
+    if (!record) {
+      return this.addRecord(deptId, moduleId, { date, checked: true });
+    }
+    return this.updateRecord(deptId, moduleId, record.id, { checked: !record.checked, date });
   },
 
   addRecord(deptId, moduleId, entry) {
@@ -1121,6 +1158,218 @@ const Store = {
     const fmt = (d) =>
       `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
     return `${fmt(monday)} - ${fmt(sunday)}`;
+  },
+
+  /** 某 ISO 周的周一…周日详情 */
+  weekDayEntries(weekKey = this.weekKey()) {
+    const m = String(weekKey || '').match(/^(\d{4})-W(\d{2})$/);
+    let monday;
+    if (m) {
+      const year = Number(m[1]);
+      const week = Number(m[2]);
+      const simple = new Date(year, 0, 1 + (week - 1) * 7);
+      const dow = simple.getDay();
+      monday = new Date(simple);
+      if (dow <= 4) monday.setDate(simple.getDate() - simple.getDay() + 1);
+      else monday.setDate(simple.getDate() + 8 - simple.getDay());
+    } else {
+      monday = new Date();
+      const offset = (monday.getDay() + 6) % 7;
+      monday.setDate(monday.getDate() - offset);
+    }
+    monday.setHours(0, 0, 0, 0);
+    const labels =
+      typeof WEEKDAY_LABELS !== 'undefined' ? WEEKDAY_LABELS : ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+    return labels.map((label, i) => {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return {
+        label,
+        date: `${yyyy}-${mm}-${dd}`,
+        md: `${mm}/${dd}`,
+      };
+    });
+  },
+
+  monthKey(date = new Date()) {
+    const d = date instanceof Date ? date : new Date(date);
+    if (Number.isNaN(d.getTime())) {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    }
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  },
+
+  monthLabel(monthKey) {
+    const m = String(monthKey || '').match(/^(\d{4})-(\d{2})$/);
+    if (!m) return monthKey || '';
+    return `${m[1]}年${Number(m[2])}月`;
+  },
+
+  currentPlanKey(type) {
+    if (type === 'weekly') return this.weekKey();
+    if (type === 'monthly') return this.monthKey();
+    return typeof todayStr === 'function' ? todayStr() : this.monthKey().slice(0, 7) + '-01';
+  },
+
+  shiftPlanKey(type, key, delta) {
+    if (type === 'weekly') {
+      const m = String(key || '').match(/^(\d{4})-W(\d{2})$/);
+      if (!m) return this.weekKey();
+      const year = Number(m[1]);
+      const week = Number(m[2]);
+      const simple = new Date(year, 0, 1 + (week - 1) * 7);
+      const dow = simple.getDay();
+      const monday = new Date(simple);
+      if (dow <= 4) monday.setDate(simple.getDate() - simple.getDay() + 1);
+      else monday.setDate(simple.getDate() + 8 - simple.getDay());
+      monday.setDate(monday.getDate() + delta * 7);
+      return this.weekKey(monday);
+    }
+    if (type === 'monthly') {
+      const m = String(key || '').match(/^(\d{4})-(\d{2})$/);
+      const d = m ? new Date(Number(m[1]), Number(m[2]) - 1 + delta, 1) : new Date();
+      return this.monthKey(d);
+    }
+    const d = new Date(`${key || todayStr()}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return todayStr();
+    d.setDate(d.getDate() + delta);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  },
+
+  planKeyLabel(type, key) {
+    if (type === 'weekly') return this.weekRangeLabel(key);
+    if (type === 'monthly') return this.monthLabel(key);
+    if (typeof formatDate === 'function') return formatDate(key);
+    return key;
+  },
+
+  planChipLabel(type, key) {
+    const current = this.currentPlanKey(type);
+    if (key === current) {
+      if (type === 'weekly') return '本周';
+      if (type === 'monthly') return '本月';
+      return '今天';
+    }
+    return this.planKeyLabel(type, key);
+  },
+
+  /** 按未来 / 当前锚点 / 过去 聚合某类计划；anchorDate 为 YYYY-MM-DD */
+  getPlanTimeline(type, anchorDate = null) {
+    const t = type === 'weekly' || type === 'monthly' ? type : 'daily';
+    const plans = this.getSettings().plans || {};
+    const bucket = plans[t] || {};
+    let current;
+    if (anchorDate && /^\d{4}-\d{2}-\d{2}$/.test(anchorDate)) {
+      const d = new Date(`${anchorDate}T00:00:00`);
+      if (t === 'weekly') current = this.weekKey(d);
+      else if (t === 'monthly') current = this.monthKey(d);
+      else current = anchorDate;
+    } else {
+      current = this.currentPlanKey(t);
+    }
+    const keys = new Set(Object.keys(bucket).filter((k) => Array.isArray(bucket[k]) && bucket[k].length));
+    keys.add(current);
+    const sorted = [...keys].sort((a, b) => a.localeCompare(b));
+    const future = [];
+    const past = [];
+    let today = { key: current, label: this.planKeyLabel(t, current), items: this.getPlanItems(t, current) };
+    sorted.forEach((key) => {
+      const items = this.getPlanItems(t, key);
+      const entry = { key, label: this.planKeyLabel(t, key), items };
+      if (key === current) today = entry;
+      else if (key > current) future.push(entry);
+      else past.push(entry);
+    });
+    future.sort((a, b) => a.key.localeCompare(b.key));
+    past.sort((a, b) => b.key.localeCompare(a.key));
+    return { type: t, current, future, today, past };
+  },
+
+  /** 周统计打卡表：行=事项文案，列=周一…周日 */
+  getPlanWeekTracker(weekKey) {
+    const key = weekKey || this.weekKey();
+    const m = String(key).match(/^(\d{4})-W(\d{2})$/);
+    let monday;
+    if (m) {
+      const year = Number(m[1]);
+      const week = Number(m[2]);
+      const simple = new Date(year, 0, 1 + (week - 1) * 7);
+      const dow = simple.getDay();
+      monday = new Date(simple);
+      if (dow <= 4) monday.setDate(simple.getDate() - simple.getDay() + 1);
+      else monday.setDate(simple.getDate() + 8 - simple.getDay());
+    } else {
+      monday = new Date();
+      const offset = (monday.getDay() + 6) % 7;
+      monday.setDate(monday.getDate() - offset);
+      monday.setHours(0, 0, 0, 0);
+    }
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      days.push(
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      );
+    }
+    const rowMap = new Map();
+    days.forEach((date) => {
+      this.getPlanItems('daily', date).forEach((item) => {
+        const label = String(item.text || '').trim() || '未命名';
+        if (!rowMap.has(label)) {
+          rowMap.set(label, { label, cells: {} });
+        }
+        const row = rowMap.get(label);
+        const prev = row.cells[date];
+        if (!prev) row.cells[date] = { done: Boolean(item.done), count: 1 };
+        else {
+          row.cells[date] = {
+            done: prev.done || Boolean(item.done),
+            count: prev.count + 1,
+          };
+        }
+      });
+    });
+    return {
+      weekKey: key,
+      rangeLabel: this.weekRangeLabel(key),
+      days,
+      rows: [...rowMap.values()],
+    };
+  },
+
+  /** 月统计：每日完成率 */
+  getPlanMonthStats(monthKey) {
+    const key = monthKey || this.monthKey();
+    const m = String(key).match(/^(\d{4})-(\d{2})$/);
+    const year = m ? Number(m[1]) : new Date().getFullYear();
+    const month = m ? Number(m[2]) - 1 : new Date().getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const days = [];
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const items = this.getPlanItems('daily', date);
+      const total = items.length;
+      const done = items.filter((i) => i.done).length;
+      days.push({
+        d,
+        date,
+        total,
+        done,
+        rate: total ? done / total : 0,
+      });
+    }
+    return {
+      monthKey: key,
+      label: this.monthLabel(key),
+      year,
+      month,
+      days,
+    };
   },
 
   getPlanItems(type, key) {
@@ -1505,17 +1754,101 @@ const Store = {
     this.save(data);
   },
 
-  addPlanItem(type, key, text) {
+  addPlanItem(type, key, text, extra = {}) {
     const items = this.getPlanItems(type, key);
-    items.push({
+    const note = String(extra?.note || '').trim();
+    const priority =
+      extra?.priority === 'high' || extra?.priority === 'medium' || extra?.priority === 'low'
+        ? extra.priority
+        : 'none';
+    const tags = Array.isArray(extra?.tags)
+      ? extra.tags.map((t) => String(t || '').trim()).filter(Boolean)
+      : [];
+    const children = (Array.isArray(extra?.children) ? extra.children : [])
+      .map((child) => {
+        if (typeof child === 'string') {
+          const t = child.trim();
+          if (!t) return null;
+          return {
+            id: crypto.randomUUID(),
+            text: t,
+            done: false,
+            createdAt: new Date().toISOString(),
+          };
+        }
+        return null;
+      })
+      .filter(Boolean);
+    const item = {
       id: crypto.randomUUID(),
       text: String(text || '').trim(),
-      done: false,
+      done: Boolean(extra?.done),
       createdAt: new Date().toISOString(),
-      children: [],
-    });
+      priority,
+      tags,
+      children,
+    };
+    if (note) item.note = note;
+    items.push(item);
     this.setPlanItems(type, key, items);
     return items;
+  },
+
+  getPlanMoments(type, key) {
+    const t = type === 'weekly' || type === 'monthly' ? type : 'daily';
+    const moments = this.getSettings().planMoments || {};
+    const bucket = moments[t] || {};
+    const list = Array.isArray(bucket[key]) ? bucket[key] : [];
+    return list
+      .map((m) => ({
+        id: m.id,
+        text: String(m.text || ''),
+        note: String(m.note || ''),
+        time: String(m.time || '').slice(0, 5),
+        createdAt: m.createdAt || '',
+      }))
+      .filter((m) => m.id && m.text)
+      .sort((a, b) => {
+        const ta = a.time || '99:99';
+        const tb = b.time || '99:99';
+        if (ta !== tb) return ta.localeCompare(tb);
+        return String(a.createdAt).localeCompare(String(b.createdAt));
+      });
+  },
+
+  setPlanMoments(type, key, list) {
+    const t = type === 'weekly' || type === 'monthly' ? type : 'daily';
+    const data = this.load();
+    data.settings = data.settings || {};
+    data.settings.planMoments = data.settings.planMoments || {};
+    data.settings.planMoments[t] = data.settings.planMoments[t] || {};
+    data.settings.planMoments[t][key] = Array.isArray(list) ? list : [];
+    this.save(data);
+  },
+
+  addPlanMoment(type, key, { text, note = '', time = '' } = {}) {
+    const trimmed = String(text || '').trim();
+    if (!trimmed) return null;
+    const list = this.getPlanMoments(type, key);
+    const moment = {
+      id: crypto.randomUUID(),
+      text: trimmed,
+      note: String(note || '').trim(),
+      time: String(time || '').slice(0, 5),
+      createdAt: new Date().toISOString(),
+    };
+    list.push(moment);
+    this.setPlanMoments(type, key, list);
+    return moment;
+  },
+
+  deletePlanMoment(type, key, momentId) {
+    if (!momentId) return;
+    this.setPlanMoments(
+      type,
+      key,
+      this.getPlanMoments(type, key).filter((m) => m.id !== momentId)
+    );
   },
 
   findPlanItem(items, itemId) {
@@ -1530,19 +1863,30 @@ const Store = {
     return null;
   },
 
-  addPlanSubItem(type, key, parentId, text) {
+  addPlanSubItem(type, key, parentId, text, extra = {}) {
     const trimmed = String(text || '').trim();
     if (!trimmed || !parentId) return null;
     const items = this.getPlanItems(type, key);
     const parent = items.find((item) => item.id === parentId);
     if (!parent) return null;
     if (!Array.isArray(parent.children)) parent.children = [];
+    const priority =
+      extra?.priority === 'high' || extra?.priority === 'medium' || extra?.priority === 'low'
+        ? extra.priority
+        : 'none';
+    const tags = Array.isArray(extra?.tags)
+      ? extra.tags.map((t) => String(t || '').trim()).filter(Boolean)
+      : [];
+    const note = String(extra?.note || '').trim();
     const child = {
       id: crypto.randomUUID(),
       text: trimmed,
       done: false,
       createdAt: new Date().toISOString(),
+      priority,
+      tags,
     };
+    if (note) child.note = note;
     parent.children.push(child);
     this.setPlanItems(type, key, items);
     return child;
@@ -1584,7 +1928,13 @@ const Store = {
       text: String(item.text || ''),
       done: Boolean(item.done),
       createdAt: item.createdAt || new Date().toISOString(),
+      priority:
+        item.priority === 'high' || item.priority === 'medium' || item.priority === 'low'
+          ? item.priority
+          : 'none',
     };
+    if (item.note) child.note = item.note;
+    if (Array.isArray(item.tags) && item.tags.length) child.tags = [...item.tags];
     const kind = item.refKind || (item.interviewId ? 'interview' : null);
     const refId = item.refId || item.interviewId;
     if (kind && refId) {
@@ -1824,6 +2174,80 @@ const Store = {
     return items;
   },
 
+  updatePlanItem(type, key, itemId, patch = {}) {
+    const items = this.getPlanItems(type, key);
+    const found = this.findPlanItem(items, itemId);
+    if (!found) return null;
+    const item = found.item;
+    if (patch.text != null) item.text = String(patch.text || '').trim();
+    if (patch.note != null) {
+      const note = String(patch.note || '').trim();
+      if (note) item.note = note;
+      else delete item.note;
+    }
+    if (patch.priority != null) {
+      item.priority =
+        patch.priority === 'high' || patch.priority === 'medium' || patch.priority === 'low'
+          ? patch.priority
+          : 'none';
+    }
+    if (Array.isArray(patch.tags)) {
+      item.tags = patch.tags.map((t) => String(t || '').trim()).filter(Boolean);
+    }
+    if (Array.isArray(patch.children) && !found.parent) {
+      const prev = Array.isArray(item.children) ? item.children : [];
+      const refs = prev.filter((c) => c.refKind && c.refId);
+      const nextText = patch.children.map((t) => String(t || '').trim()).filter(Boolean);
+      const next = nextText.map((text, i) => {
+        const old = prev.find((c) => !c.refKind && String(c.text || '') === text) || prev.filter((c) => !c.refKind)[i];
+        if (old && !old.refKind) {
+          return { ...old, text };
+        }
+        return {
+          id: crypto.randomUUID(),
+          text,
+          done: false,
+          createdAt: new Date().toISOString(),
+        };
+      });
+      item.children = [...next, ...refs];
+    }
+    if (patch.done != null) item.done = Boolean(patch.done);
+    this.setPlanItems(type, key, items);
+    return item;
+  },
+
+  /** 将顶级待办移到同一 type 下的另一个 key */
+  movePlanItemToKey(type, fromKey, toKey, itemId) {
+    if (!itemId || fromKey === toKey) return false;
+    const fromItems = this.getPlanItems(type, fromKey);
+    const found = this.findPlanItem(fromItems, itemId);
+    if (!found || found.parent) return false;
+    const removed = this.removePlanItemFromTree(fromItems, itemId);
+    if (!removed) return false;
+    this.setPlanItems(type, fromKey, fromItems);
+    const toItems = this.getPlanItems(type, toKey);
+    toItems.push(removed);
+    this.setPlanItems(type, toKey, toItems);
+    return true;
+  },
+
+  /** 将同级待办排到目标下标 */
+  reorderPlanItem(type, key, itemId, toIndex) {
+    const items = this.getPlanItems(type, key);
+    const found = this.findPlanItem(items, itemId);
+    if (!found) return false;
+    const list = found.parent ? found.parent.children || [] : items;
+    const from = list.findIndex((item) => item.id === itemId);
+    if (from < 0) return false;
+    const target = Math.max(0, Math.min(Number(toIndex), list.length - 1));
+    if (from === target) return true;
+    const [moved] = list.splice(from, 1);
+    list.splice(target, 0, moved);
+    this.setPlanItems(type, key, items);
+    return true;
+  },
+
   deletePlanItem(type, key, itemId) {
     const items = this.getPlanItems(type, key);
     const found = this.findPlanItem(items, itemId);
@@ -1878,6 +2302,104 @@ const Store = {
     const key = this.moduleMetaKey(deptId, moduleId);
     delete data.settings.moduleMeta[key];
     this.save(data);
+  },
+
+  getCustomLivingModules() {
+    const list = this.getSettings().customLivingModules;
+    return Array.isArray(list) ? list : [];
+  },
+
+  getCustomLivingModule(moduleId) {
+    return this.getCustomLivingModules().find((m) => m.id === moduleId) || null;
+  },
+
+  addCustomLivingModule(partial) {
+    const data = this.load();
+    data.settings = data.settings || {};
+    data.settings.customLivingModules = Array.isArray(data.settings.customLivingModules)
+      ? data.settings.customLivingModules
+      : [];
+    const item = {
+      id: crypto.randomUUID(),
+      sectionId: partial.sectionId || 'beauty',
+      name: String(partial.name || '未命名打卡').trim() || '未命名打卡',
+      icon: String(partial.icon || '✅').trim() || '✅',
+      desc: String(partial.desc || '').trim(),
+      moduleKind: 'customCheckin',
+      recordView: 'customCheckin',
+      checkinFreq: partial.checkinFreq || 'weekly',
+      checkinDays: Array.isArray(partial.checkinDays) ? partial.checkinDays : undefined,
+      editable: true,
+      custom: true,
+      createdAt: new Date().toISOString(),
+    };
+    if (item.checkinFreq !== 'custom') delete item.checkinDays;
+    data.settings.customLivingModules.push(item);
+    this.save(data);
+    return item;
+  },
+
+  updateCustomLivingModule(moduleId, partial) {
+    const data = this.load();
+    data.settings = data.settings || {};
+    const list = Array.isArray(data.settings.customLivingModules)
+      ? data.settings.customLivingModules
+      : [];
+    const idx = list.findIndex((m) => m.id === moduleId);
+    if (idx < 0) return null;
+    const next = { ...list[idx], ...partial, id: moduleId, custom: true };
+    Object.keys(next).forEach((k) => {
+      if (k === 'desc') {
+        next.desc = String(next.desc || '').trim();
+        return;
+      }
+      if (next[k] === '' || next[k] == null) delete next[k];
+    });
+    if (next.checkinFreq !== 'custom') delete next.checkinDays;
+    list[idx] = next;
+    data.settings.customLivingModules = list;
+    this.save(data);
+    return next;
+  },
+
+  deleteCustomLivingModule(moduleId) {
+    const data = this.load();
+    if (!Array.isArray(data.settings?.customLivingModules)) return false;
+    const before = data.settings.customLivingModules.length;
+    data.settings.customLivingModules = data.settings.customLivingModules.filter((m) => m.id !== moduleId);
+    if (data.settings.customLivingModules.length === before) return false;
+    const key = this.recordKey('living', moduleId);
+    if (data.records?.[key]) delete data.records[key];
+    const metaKey = this.moduleMetaKey('living', moduleId);
+    if (data.settings.moduleMeta?.[metaKey]) delete data.settings.moduleMeta[metaKey];
+    this.save(data);
+    return true;
+  },
+
+  getHiddenLivingModules() {
+    const list = this.getSettings().hiddenLivingModules;
+    return Array.isArray(list) ? list : [];
+  },
+
+  isLivingModuleHidden(moduleId) {
+    return this.getHiddenLivingModules().includes(moduleId);
+  },
+
+  /** 删除内置仪容打卡：隐藏模块并清除记录 */
+  hideLivingModule(moduleId) {
+    const data = this.load();
+    data.settings = data.settings || {};
+    const list = Array.isArray(data.settings.hiddenLivingModules)
+      ? data.settings.hiddenLivingModules
+      : [];
+    if (!list.includes(moduleId)) list.push(moduleId);
+    data.settings.hiddenLivingModules = list;
+    const key = this.recordKey('living', moduleId);
+    if (data.records?.[key]) delete data.records[key];
+    const metaKey = this.moduleMetaKey('living', moduleId);
+    if (data.settings.moduleMeta?.[metaKey]) delete data.settings.moduleMeta[metaKey];
+    this.save(data);
+    return true;
   },
 
   getDeptMeta(deptId) {
@@ -1949,7 +2471,7 @@ const Store = {
     const map = {
       record: '记录',
       card: '打卡卡片',
-      planItem: '计划待办',
+      planItem: '待办',
       descTip: '描述意见',
       bodyComment: '相关面试题',
       calendarTask: '月历任务',
@@ -2479,15 +3001,31 @@ const Store = {
   },
 
   normalizeCalendarItemColor(color, kind = 'task') {
+    const legacyMap = {
+      '#F59E0B': '#5B9EFF',
+      '#FBBF24': '#69B1FF',
+      '#D97706': '#388BFF',
+      '#10B981': '#FF6B8A',
+      '#14B8A6': '#69B1FF',
+      '#0D9488': '#5B9EFF',
+      '#059669': '#FF8FA3',
+      '#3B82F6': '#388BFF',
+      '#8B5CF6': '#FF6B8A',
+      '#EC4899': '#FF6B8A',
+      '#F43F5E': '#FF6B8A',
+    };
     const raw = String(color || '').trim();
-    if (/^#[0-9A-Fa-f]{6}$/.test(raw)) return raw.toUpperCase();
-    if (/^#[0-9A-Fa-f]{3}$/.test(raw)) {
+    let hex = '';
+    if (/^#[0-9A-Fa-f]{6}$/.test(raw)) hex = raw.toUpperCase();
+    else if (/^#[0-9A-Fa-f]{3}$/.test(raw)) {
       const r = raw[1];
       const g = raw[2];
       const b = raw[3];
-      return `#${r}${r}${g}${g}${b}${b}`.toUpperCase();
+      hex = `#${r}${r}${g}${g}${b}${b}`.toUpperCase();
+    } else {
+      return kind === 'schedule' ? '#388BFF' : '#5B9EFF';
     }
-    return kind === 'schedule' ? '#3B82F6' : '#F59E0B';
+    return legacyMap[hex] || hex;
   },
 
   getCalendarDayOrders() {
