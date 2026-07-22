@@ -2784,7 +2784,9 @@ body {
   gap: 12px;
 }
 
-.living-workspace .accordion-item[data-dept='living'] {
+.living-workspace .accordion-item[data-dept='living'],
+.living-workspace .accordion-item[data-dept='sidebiz'],
+.living-workspace .accordion-item[data-dept='experience'] {
   background: var(--living-card);
   border: 1px solid var(--living-border);
   border-radius: 12px;
@@ -2792,12 +2794,16 @@ body {
 }
 
 .living-workspace .accordion-header-row-living,
-.living-workspace .accordion-item[data-dept='living'] .accordion-header-row {
+.living-workspace .accordion-item[data-dept='living'] .accordion-header-row,
+.living-workspace .accordion-item[data-dept='sidebiz'] .accordion-header-row,
+.living-workspace .accordion-item[data-dept='experience'] .accordion-header-row {
   background: var(--living-card);
 }
 
 .living-workspace .accordion-header-row-living::after,
-.living-workspace .accordion-item[data-dept='living'] .accordion-header-row::after {
+.living-workspace .accordion-item[data-dept='living'] .accordion-header-row::after,
+.living-workspace .accordion-item[data-dept='sidebiz'] .accordion-header-row::after,
+.living-workspace .accordion-item[data-dept='experience'] .accordion-header-row::after {
   background: var(--living-border);
   left: 16px;
   right: 16px;
@@ -3837,7 +3843,11 @@ body {
 }
 
 .accordion-item[data-dept='living'] .accordion-header-row,
-.accordion-item[data-dept='living'].expanded .accordion-header-row {
+.accordion-item[data-dept='living'].expanded .accordion-header-row,
+.accordion-item[data-dept='sidebiz'] .accordion-header-row,
+.accordion-item[data-dept='sidebiz'].expanded .accordion-header-row,
+.accordion-item[data-dept='experience'] .accordion-header-row,
+.accordion-item[data-dept='experience'].expanded .accordion-header-row {
   background: #fff;
   border-bottom: none;
   box-shadow: none;
@@ -3845,7 +3855,11 @@ body {
 }
 
 .accordion-item[data-dept='living'] .accordion-header-row::after,
-.accordion-item[data-dept='living'].expanded .accordion-header-row::after {
+.accordion-item[data-dept='living'].expanded .accordion-header-row::after,
+.accordion-item[data-dept='sidebiz'] .accordion-header-row::after,
+.accordion-item[data-dept='sidebiz'].expanded .accordion-header-row::after,
+.accordion-item[data-dept='experience'] .accordion-header-row::after,
+.accordion-item[data-dept='experience'].expanded .accordion-header-row::after {
   content: '';
   position: absolute;
   left: 14px;
@@ -3857,18 +3871,30 @@ body {
 }
 
 .accordion-item[data-dept='living'] .accordion-header,
-.accordion-item[data-dept='living'] .accordion-header:hover {
+.accordion-item[data-dept='living'] .accordion-header:hover,
+.accordion-item[data-dept='sidebiz'] .accordion-header,
+.accordion-item[data-dept='sidebiz'] .accordion-header:hover,
+.accordion-item[data-dept='experience'] .accordion-header,
+.accordion-item[data-dept='experience'] .accordion-header:hover {
   background: transparent;
 }
 
 .accordion-item[data-dept='living'].expanded .accordion-header,
 .accordion-item[data-dept='living'].expanded .accordion-header:hover,
-.accordion-item[data-dept='living'].expanded .accordion-header-living {
+.accordion-item[data-dept='living'].expanded .accordion-header-living,
+.accordion-item[data-dept='sidebiz'].expanded .accordion-header,
+.accordion-item[data-dept='sidebiz'].expanded .accordion-header:hover,
+.accordion-item[data-dept='sidebiz'].expanded .accordion-header-living,
+.accordion-item[data-dept='experience'].expanded .accordion-header,
+.accordion-item[data-dept='experience'].expanded .accordion-header:hover,
+.accordion-item[data-dept='experience'].expanded .accordion-header-living {
   background: transparent;
   border-bottom: none;
 }
 
-.accordion-item[data-dept='living'].expanded .accordion-meta {
+.accordion-item[data-dept='living'].expanded .accordion-meta,
+.accordion-item[data-dept='sidebiz'].expanded .accordion-meta,
+.accordion-item[data-dept='experience'].expanded .accordion-meta {
   display: none;
 }
 

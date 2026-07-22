@@ -447,8 +447,8 @@ const DEPARTMENTS = [
     name: '副业（🚧 施工中）',
     desc: '第二增长曲线',
     layout: 'accordion',
-    color: '#EA580C',
-    bg: '#FFF7ED',
+    color: '#388BFF',
+    bg: '#F5F5F5',
     modules: [
       {
         id: 'xiaohongshu',
@@ -485,8 +485,8 @@ const DEPARTMENTS = [
     name: '休息（🚧 施工中）',
     desc: '休息充电',
     layout: 'accordion',
-    color: '#7C3AED',
-    bg: '#F5F3FF',
+    color: '#388BFF',
+    bg: '#F5F5F5',
     modules: [
       {
         id: 'travel',
