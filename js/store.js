@@ -193,6 +193,23 @@ const Store = {
       data.settings.customBaguBanks = [];
       changed = true;
     }
+    // 部门名：「施工ing」→「🚧 施工中」
+    if (data.settings.deptMeta && typeof data.settings.deptMeta === 'object') {
+      const deptMeta = { ...data.settings.deptMeta };
+      let metaChanged = false;
+      for (const [deptId, meta] of Object.entries(deptMeta)) {
+        if (!meta || typeof meta.name !== 'string' || !meta.name.includes('施工ing')) continue;
+        deptMeta[deptId] = {
+          ...meta,
+          name: meta.name.replace(/施工ing/g, '🚧 施工中'),
+        };
+        metaChanged = true;
+      }
+      if (metaChanged) {
+        data.settings = { ...data.settings, deptMeta };
+        changed = true;
+      }
+    }
     if (typeof this._purgeExpiredRecycleBin === 'function') {
       if (this._purgeExpiredRecycleBin(data)) {
         changed = true;
@@ -786,19 +803,19 @@ const Store = {
     );
   },
 
-  toggleWeekdayCheck(deptId, moduleId, dayLabel, weekdays = WEEKDAY_LABELS) {
-    const weekKey = this.weekKey();
-    let record = this.getWeekCheckinRecord(deptId, moduleId, weekKey);
+  toggleWeekdayCheck(deptId, moduleId, dayLabel, weekdays = WEEKDAY_LABELS, weekKey = this.weekKey()) {
+    const key = weekKey || this.weekKey();
+    let record = this.getWeekCheckinRecord(deptId, moduleId, key);
     if (!record) {
       const days = {};
       weekdays.forEach((d) => {
         days[d] = d === dayLabel;
       });
-      return this.addRecord(deptId, moduleId, { date: weekKey, weekKey, days });
+      return this.addRecord(deptId, moduleId, { date: key, weekKey: key, days });
     }
     const days = { ...(record.days || {}) };
     days[dayLabel] = !days[dayLabel];
-    return this.updateRecord(deptId, moduleId, record.id, { days, weekKey });
+    return this.updateRecord(deptId, moduleId, record.id, { days, weekKey: key });
   },
 
   getWeekdayProgress(record, weekdays = WEEKDAY_LABELS) {
@@ -811,6 +828,26 @@ const Store = {
     const label = todayWeekdayLabel();
     const record = this.getWeekCheckinRecord(deptId, moduleId);
     return Boolean(record?.days?.[label]);
+  },
+
+  getDailyCheckinRecord(deptId, moduleId, date = todayStr()) {
+    return (
+      this.getRawRecords(deptId, moduleId).find(
+        (r) => String(r.date || '').slice(0, 10) === date && !r.weekKey && r.days == null
+      ) || null
+    );
+  },
+
+  isDailyChecked(deptId, moduleId, date = todayStr()) {
+    return Boolean(this.getDailyCheckinRecord(deptId, moduleId, date)?.checked);
+  },
+
+  toggleDailyCheck(deptId, moduleId, date = todayStr()) {
+    let record = this.getDailyCheckinRecord(deptId, moduleId, date);
+    if (!record) {
+      return this.addRecord(deptId, moduleId, { date, checked: true });
+    }
+    return this.updateRecord(deptId, moduleId, record.id, { checked: !record.checked, date });
   },
 
   addRecord(deptId, moduleId, entry) {
@@ -1123,6 +1160,40 @@ const Store = {
     return `${fmt(monday)} - ${fmt(sunday)}`;
   },
 
+  /** 某 ISO 周的周一…周日详情 */
+  weekDayEntries(weekKey = this.weekKey()) {
+    const m = String(weekKey || '').match(/^(\d{4})-W(\d{2})$/);
+    let monday;
+    if (m) {
+      const year = Number(m[1]);
+      const week = Number(m[2]);
+      const simple = new Date(year, 0, 1 + (week - 1) * 7);
+      const dow = simple.getDay();
+      monday = new Date(simple);
+      if (dow <= 4) monday.setDate(simple.getDate() - simple.getDay() + 1);
+      else monday.setDate(simple.getDate() + 8 - simple.getDay());
+    } else {
+      monday = new Date();
+      const offset = (monday.getDay() + 6) % 7;
+      monday.setDate(monday.getDate() - offset);
+    }
+    monday.setHours(0, 0, 0, 0);
+    const labels =
+      typeof WEEKDAY_LABELS !== 'undefined' ? WEEKDAY_LABELS : ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+    return labels.map((label, i) => {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return {
+        label,
+        date: `${yyyy}-${mm}-${dd}`,
+        md: `${mm}/${dd}`,
+      };
+    });
+  },
+
   monthKey(date = new Date()) {
     const d = date instanceof Date ? date : new Date(date);
     if (Number.isNaN(d.getTime())) {
@@ -1186,12 +1257,20 @@ const Store = {
     return this.planKeyLabel(type, key);
   },
 
-  /** 按未来 / 今天(本周/本月) / 过去 聚合某类计划 */
-  getPlanTimeline(type) {
+  /** 按未来 / 当前锚点 / 过去 聚合某类计划；anchorDate 为 YYYY-MM-DD */
+  getPlanTimeline(type, anchorDate = null) {
     const t = type === 'weekly' || type === 'monthly' ? type : 'daily';
     const plans = this.getSettings().plans || {};
     const bucket = plans[t] || {};
-    const current = this.currentPlanKey(t);
+    let current;
+    if (anchorDate && /^\d{4}-\d{2}-\d{2}$/.test(anchorDate)) {
+      const d = new Date(`${anchorDate}T00:00:00`);
+      if (t === 'weekly') current = this.weekKey(d);
+      else if (t === 'monthly') current = this.monthKey(d);
+      else current = anchorDate;
+    } else {
+      current = this.currentPlanKey(t);
+    }
     const keys = new Set(Object.keys(bucket).filter((k) => Array.isArray(bucket[k]) && bucket[k].length));
     keys.add(current);
     const sorted = [...keys].sort((a, b) => a.localeCompare(b));
@@ -1703,7 +1782,7 @@ const Store = {
     const item = {
       id: crypto.randomUUID(),
       text: String(text || '').trim(),
-      done: false,
+      done: Boolean(extra?.done),
       createdAt: new Date().toISOString(),
       priority,
       tags,
@@ -1713,6 +1792,63 @@ const Store = {
     items.push(item);
     this.setPlanItems(type, key, items);
     return items;
+  },
+
+  getPlanMoments(type, key) {
+    const t = type === 'weekly' || type === 'monthly' ? type : 'daily';
+    const moments = this.getSettings().planMoments || {};
+    const bucket = moments[t] || {};
+    const list = Array.isArray(bucket[key]) ? bucket[key] : [];
+    return list
+      .map((m) => ({
+        id: m.id,
+        text: String(m.text || ''),
+        note: String(m.note || ''),
+        time: String(m.time || '').slice(0, 5),
+        createdAt: m.createdAt || '',
+      }))
+      .filter((m) => m.id && m.text)
+      .sort((a, b) => {
+        const ta = a.time || '99:99';
+        const tb = b.time || '99:99';
+        if (ta !== tb) return ta.localeCompare(tb);
+        return String(a.createdAt).localeCompare(String(b.createdAt));
+      });
+  },
+
+  setPlanMoments(type, key, list) {
+    const t = type === 'weekly' || type === 'monthly' ? type : 'daily';
+    const data = this.load();
+    data.settings = data.settings || {};
+    data.settings.planMoments = data.settings.planMoments || {};
+    data.settings.planMoments[t] = data.settings.planMoments[t] || {};
+    data.settings.planMoments[t][key] = Array.isArray(list) ? list : [];
+    this.save(data);
+  },
+
+  addPlanMoment(type, key, { text, note = '', time = '' } = {}) {
+    const trimmed = String(text || '').trim();
+    if (!trimmed) return null;
+    const list = this.getPlanMoments(type, key);
+    const moment = {
+      id: crypto.randomUUID(),
+      text: trimmed,
+      note: String(note || '').trim(),
+      time: String(time || '').slice(0, 5),
+      createdAt: new Date().toISOString(),
+    };
+    list.push(moment);
+    this.setPlanMoments(type, key, list);
+    return moment;
+  },
+
+  deletePlanMoment(type, key, momentId) {
+    if (!momentId) return;
+    this.setPlanMoments(
+      type,
+      key,
+      this.getPlanMoments(type, key).filter((m) => m.id !== momentId)
+    );
   },
 
   findPlanItem(items, itemId) {
@@ -2076,6 +2212,7 @@ const Store = {
       });
       item.children = [...next, ...refs];
     }
+    if (patch.done != null) item.done = Boolean(patch.done);
     this.setPlanItems(type, key, items);
     return item;
   },
@@ -2167,6 +2304,104 @@ const Store = {
     this.save(data);
   },
 
+  getCustomLivingModules() {
+    const list = this.getSettings().customLivingModules;
+    return Array.isArray(list) ? list : [];
+  },
+
+  getCustomLivingModule(moduleId) {
+    return this.getCustomLivingModules().find((m) => m.id === moduleId) || null;
+  },
+
+  addCustomLivingModule(partial) {
+    const data = this.load();
+    data.settings = data.settings || {};
+    data.settings.customLivingModules = Array.isArray(data.settings.customLivingModules)
+      ? data.settings.customLivingModules
+      : [];
+    const item = {
+      id: crypto.randomUUID(),
+      sectionId: partial.sectionId || 'beauty',
+      name: String(partial.name || '未命名打卡').trim() || '未命名打卡',
+      icon: String(partial.icon || '✅').trim() || '✅',
+      desc: String(partial.desc || '').trim(),
+      moduleKind: 'customCheckin',
+      recordView: 'customCheckin',
+      checkinFreq: partial.checkinFreq || 'weekly',
+      checkinDays: Array.isArray(partial.checkinDays) ? partial.checkinDays : undefined,
+      editable: true,
+      custom: true,
+      createdAt: new Date().toISOString(),
+    };
+    if (item.checkinFreq !== 'custom') delete item.checkinDays;
+    data.settings.customLivingModules.push(item);
+    this.save(data);
+    return item;
+  },
+
+  updateCustomLivingModule(moduleId, partial) {
+    const data = this.load();
+    data.settings = data.settings || {};
+    const list = Array.isArray(data.settings.customLivingModules)
+      ? data.settings.customLivingModules
+      : [];
+    const idx = list.findIndex((m) => m.id === moduleId);
+    if (idx < 0) return null;
+    const next = { ...list[idx], ...partial, id: moduleId, custom: true };
+    Object.keys(next).forEach((k) => {
+      if (k === 'desc') {
+        next.desc = String(next.desc || '').trim();
+        return;
+      }
+      if (next[k] === '' || next[k] == null) delete next[k];
+    });
+    if (next.checkinFreq !== 'custom') delete next.checkinDays;
+    list[idx] = next;
+    data.settings.customLivingModules = list;
+    this.save(data);
+    return next;
+  },
+
+  deleteCustomLivingModule(moduleId) {
+    const data = this.load();
+    if (!Array.isArray(data.settings?.customLivingModules)) return false;
+    const before = data.settings.customLivingModules.length;
+    data.settings.customLivingModules = data.settings.customLivingModules.filter((m) => m.id !== moduleId);
+    if (data.settings.customLivingModules.length === before) return false;
+    const key = this.recordKey('living', moduleId);
+    if (data.records?.[key]) delete data.records[key];
+    const metaKey = this.moduleMetaKey('living', moduleId);
+    if (data.settings.moduleMeta?.[metaKey]) delete data.settings.moduleMeta[metaKey];
+    this.save(data);
+    return true;
+  },
+
+  getHiddenLivingModules() {
+    const list = this.getSettings().hiddenLivingModules;
+    return Array.isArray(list) ? list : [];
+  },
+
+  isLivingModuleHidden(moduleId) {
+    return this.getHiddenLivingModules().includes(moduleId);
+  },
+
+  /** 删除内置仪容打卡：隐藏模块并清除记录 */
+  hideLivingModule(moduleId) {
+    const data = this.load();
+    data.settings = data.settings || {};
+    const list = Array.isArray(data.settings.hiddenLivingModules)
+      ? data.settings.hiddenLivingModules
+      : [];
+    if (!list.includes(moduleId)) list.push(moduleId);
+    data.settings.hiddenLivingModules = list;
+    const key = this.recordKey('living', moduleId);
+    if (data.records?.[key]) delete data.records[key];
+    const metaKey = this.moduleMetaKey('living', moduleId);
+    if (data.settings.moduleMeta?.[metaKey]) delete data.settings.moduleMeta[metaKey];
+    this.save(data);
+    return true;
+  },
+
   getDeptMeta(deptId) {
     return this.getSettings().deptMeta?.[deptId] || {};
   },
@@ -2236,7 +2471,7 @@ const Store = {
     const map = {
       record: '记录',
       card: '打卡卡片',
-      planItem: '计划待办',
+      planItem: '待办',
       descTip: '描述意见',
       bodyComment: '相关面试题',
       calendarTask: '月历任务',
@@ -2766,15 +3001,31 @@ const Store = {
   },
 
   normalizeCalendarItemColor(color, kind = 'task') {
+    const legacyMap = {
+      '#F59E0B': '#5B9EFF',
+      '#FBBF24': '#69B1FF',
+      '#D97706': '#388BFF',
+      '#10B981': '#FF6B8A',
+      '#14B8A6': '#69B1FF',
+      '#0D9488': '#5B9EFF',
+      '#059669': '#FF8FA3',
+      '#3B82F6': '#388BFF',
+      '#8B5CF6': '#FF6B8A',
+      '#EC4899': '#FF6B8A',
+      '#F43F5E': '#FF6B8A',
+    };
     const raw = String(color || '').trim();
-    if (/^#[0-9A-Fa-f]{6}$/.test(raw)) return raw.toUpperCase();
-    if (/^#[0-9A-Fa-f]{3}$/.test(raw)) {
+    let hex = '';
+    if (/^#[0-9A-Fa-f]{6}$/.test(raw)) hex = raw.toUpperCase();
+    else if (/^#[0-9A-Fa-f]{3}$/.test(raw)) {
       const r = raw[1];
       const g = raw[2];
       const b = raw[3];
-      return `#${r}${r}${g}${g}${b}${b}`.toUpperCase();
+      hex = `#${r}${r}${g}${g}${b}${b}`.toUpperCase();
+    } else {
+      return kind === 'schedule' ? '#388BFF' : '#5B9EFF';
     }
-    return kind === 'schedule' ? '#3B82F6' : '#F59E0B';
+    return legacyMap[hex] || hex;
   },
 
   getCalendarDayOrders() {

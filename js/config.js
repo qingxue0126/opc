@@ -24,9 +24,42 @@ const TOPBAR_WIDGET_DEFAULTS = {
 /** 周一 → 周日，用于按周打卡习惯 */
 const WEEKDAY_LABELS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 
+/** 自定义打卡频率 */
+const CHECKIN_FREQ_OPTIONS = [
+  { id: 'daily', label: '每天' },
+  { id: 'weekly', label: '每周（周一至周日）' },
+  { id: 'weekdays', label: '工作日（周一至周五）' },
+  { id: 'weekend', label: '周末' },
+  { id: 'custom', label: '自定义星期' },
+];
+
 function todayWeekdayLabel(date = new Date()) {
   const idx = (date.getDay() + 6) % 7; // Mon=0 … Sun=6
   return WEEKDAY_LABELS[idx];
+}
+
+function isCustomCheckinModule(mod) {
+  return Boolean(mod && (mod.moduleKind === 'customCheckin' || mod.recordView === 'customCheckin' || mod.recordView === 'weekdayCheckin'));
+}
+
+/** 按频率返回要打卡的星期列表；每天模式返回 null */
+function getCheckinDays(mod) {
+  if (!mod) return WEEKDAY_LABELS;
+  const freq = mod.checkinFreq || 'weekly';
+  if (freq === 'daily') return null;
+  if (freq === 'weekdays') return WEEKDAY_LABELS.slice(0, 5);
+  if (freq === 'weekend') return WEEKDAY_LABELS.slice(5);
+  if (freq === 'custom') {
+    const days = (Array.isArray(mod.checkinDays) ? mod.checkinDays : []).filter((d) =>
+      WEEKDAY_LABELS.includes(d)
+    );
+    return days.length ? days : [...WEEKDAY_LABELS];
+  }
+  return [...WEEKDAY_LABELS];
+}
+
+function checkinFreqLabel(freq) {
+  return CHECKIN_FREQ_OPTIONS.find((o) => o.id === freq)?.label || '每周（周一至周日）';
 }
 
 const HANDWRITE_METHOD_ORDER = [
@@ -163,8 +196,8 @@ const DEPARTMENTS = [
     name: '找工作',
     desc: '尽快找到工作',
     layout: 'pages',
-    color: '#4F46E5',
-    bg: '#EEF2FF',
+    color: '#388BFF',
+    bg: '#F5F5F5',
     modules: [
       {
         id: 'bagu',
@@ -300,16 +333,23 @@ const DEPARTMENTS = [
     id: 'living',
     order: '02',
     name: '生活',
-    desc: '身心状态 · 护肤仪容 · 日常节奏',
+    desc: '作息 · 健康 · 学习 · 仪容',
     layout: 'accordion',
-    color: '#059669',
-    bg: '#ECFDF5',
+    color: '#388BFF',
+    bg: '#F5F5F5',
+    sections: [
+      { id: 'routine', name: '作息', icon: '🌅', moduleIds: ['health', 'sleep'] },
+      { id: 'fitness', name: '健康', icon: '💪', moduleIds: ['exercise', 'weight'] },
+      { id: 'study', name: '学习', icon: '📚', moduleIds: ['study'] },
+      { id: 'beauty', name: '仪容', icon: '✨', moduleIds: ['facemask', 'hairmask', 'hairremoval'] },
+    ],
     modules: [
       {
         id: 'health',
         name: '早晨启动',
         icon: '🌅',
         desc: '每日晨间习惯清单',
+        sectionId: 'routine',
         recordView: 'habitChecklist',
         habitChecklist: ['梳头', '刷牙', '洗脸', '护肤', '喝一杯温水'],
       },
@@ -318,6 +358,7 @@ const DEPARTMENTS = [
         name: '睡眠',
         icon: '🌙',
         desc: '小憩与长睡眠',
+        sectionId: 'routine',
         editable: true,
         recordMenu: true,
         fields: [
@@ -333,6 +374,7 @@ const DEPARTMENTS = [
         name: '学习',
         icon: '📚',
         desc: '每日学习时长',
+        sectionId: 'study',
         editable: true,
         recordMenu: true,
         fields: [
@@ -346,6 +388,7 @@ const DEPARTMENTS = [
         name: '运动',
         icon: '🏃',
         desc: '类型与时长',
+        sectionId: 'fitness',
         fields: [
           { key: 'type', label: '类型', type: 'text', placeholder: '跑步/瑜伽/力量...' },
           { key: 'duration', label: '时长(分钟)', type: 'number' },
@@ -357,6 +400,7 @@ const DEPARTMENTS = [
         name: '体重',
         icon: '⚖️',
         desc: '体重趋势',
+        sectionId: 'fitness',
         fields: [
           { key: 'weight', label: '体重(kg)', type: 'number', step: 0.1, required: true },
           { key: 'note', label: '备注', type: 'textarea' },
@@ -366,29 +410,41 @@ const DEPARTMENTS = [
         id: 'facemask',
         name: '面膜',
         icon: '🧖',
-        desc: '按周打卡 · 周一到周日',
-        recordView: 'weekdayCheckin',
+        desc: '护肤打卡',
+        sectionId: 'beauty',
+        moduleKind: 'customCheckin',
+        recordView: 'customCheckin',
+        checkinFreq: 'weekly',
+        editable: true,
       },
       {
         id: 'hairmask',
         name: '发膜',
         icon: '💇',
-        desc: '按周打卡 · 周一到周日',
-        recordView: 'weekdayCheckin',
+        desc: '护发打卡',
+        sectionId: 'beauty',
+        moduleKind: 'customCheckin',
+        recordView: 'customCheckin',
+        checkinFreq: 'weekly',
+        editable: true,
       },
       {
         id: 'hairremoval',
         name: '脱毛',
         icon: '✨',
-        desc: '按周打卡 · 周一到周日',
-        recordView: 'weekdayCheckin',
+        desc: '仪容打卡',
+        sectionId: 'beauty',
+        moduleKind: 'customCheckin',
+        recordView: 'customCheckin',
+        checkinFreq: 'weekly',
+        editable: true,
       },
     ],
   },
   {
     id: 'sidebiz',
     order: '03',
-    name: '副业经营',
+    name: '副业（🚧 施工中）',
     desc: '第二增长曲线',
     layout: 'accordion',
     color: '#EA580C',
@@ -426,7 +482,7 @@ const DEPARTMENTS = [
   {
     id: 'experience',
     order: '04',
-    name: '生活体验',
+    name: '休息（🚧 施工中）',
     desc: '休息充电',
     layout: 'accordion',
     color: '#7C3AED',
@@ -466,7 +522,10 @@ function getDepartmentDefaults(deptId) {
 function getModule(deptId, moduleId) {
   const dept = getDeptBase(deptId);
   if (!dept) return null;
-  const mod = dept.modules.find((m) => m.id === moduleId);
+  let mod = dept.modules.find((m) => m.id === moduleId);
+  if (!mod && deptId === 'living' && typeof Store !== 'undefined') {
+    mod = Store.getCustomLivingModule?.(moduleId) || null;
+  }
   if (!mod) return null;
   const base = { ...mod, deptId, deptName: dept.name, deptColor: dept.color, deptBg: dept.bg };
   if (typeof Store !== 'undefined') {
@@ -478,19 +537,73 @@ function getModule(deptId, moduleId) {
 
 function getModuleDefaults(deptId, moduleId) {
   const dept = DEPARTMENTS.find((d) => d.id === deptId);
-  const mod = dept?.modules.find((m) => m.id === moduleId);
-  return mod ? { name: mod.name, icon: mod.icon, desc: mod.desc } : null;
+  let mod = dept?.modules.find((m) => m.id === moduleId);
+  if (!mod && deptId === 'living' && typeof Store !== 'undefined') {
+    mod = Store.getCustomLivingModule?.(moduleId) || null;
+  }
+  if (!mod) return null;
+  const base = { name: mod.name, icon: mod.icon, desc: mod.desc };
+  if (mod.moduleKind === 'customCheckin' || mod.recordView === 'customCheckin') {
+    return {
+      ...base,
+      checkinFreq: mod.checkinFreq || 'weekly',
+      checkinDays: Array.isArray(mod.checkinDays) ? [...mod.checkinDays] : [...WEEKDAY_LABELS],
+      custom: Boolean(mod.custom),
+    };
+  }
+  return base;
 }
 
 function getDepartment(deptId) {
   const dept = getDeptBase(deptId);
   if (!dept) return null;
+  const hidden =
+    deptId === 'living' && typeof Store !== 'undefined' && Store.isLivingModuleHidden
+      ? (id) => Store.isLivingModuleHidden(id)
+      : () => false;
+  const builtin = dept.modules
+    .filter((m) => !hidden(m.id))
+    .map((m) => getModule(deptId, m.id));
+  const custom =
+    deptId === 'living' && typeof Store !== 'undefined' && Store.getCustomLivingModules
+      ? Store.getCustomLivingModules().map((m) => getModule(deptId, m.id)).filter(Boolean)
+      : [];
+  const modules = [...builtin, ...custom];
+  const sections = Array.isArray(dept.sections)
+    ? dept.sections.map((s) => {
+        const builtinIds = (s.moduleIds || []).filter((id) => !hidden(id));
+        const extraIds = custom.filter((m) => m.sectionId === s.id).map((m) => m.id);
+        return {
+          ...s,
+          moduleIds: [...builtinIds, ...extraIds],
+        };
+      })
+    : undefined;
   return {
     ...dept,
-    modules: dept.modules.map((m) => getModule(deptId, m.id)),
+    modules,
+    sections,
   };
 }
 
+function getDeptSection(deptId, sectionId) {
+  const dept = getDepartment(deptId);
+  if (!dept?.sections?.length || !sectionId) return null;
+  return dept.sections.find((s) => s.id === sectionId) || null;
+}
+
+function getSectionModules(deptId, sectionId) {
+  const dept = getDepartment(deptId);
+  const section = getDeptSection(deptId, sectionId);
+  if (!dept || !section) return dept?.modules || [];
+  const idSet = new Set(section.moduleIds || []);
+  return dept.modules.filter((m) => idSet.has(m.id));
+}
+
 function getAllModules() {
-  return DEPARTMENTS.flatMap((d) => d.modules.map((m) => getModule(d.id, m.id)));
+  return DEPARTMENTS.flatMap((d) =>
+    d.modules
+      .filter((m) => !(d.id === 'living' && typeof Store !== 'undefined' && Store.isLivingModuleHidden?.(m.id)))
+      .map((m) => getModule(d.id, m.id))
+  );
 }
