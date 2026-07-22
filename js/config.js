@@ -198,7 +198,7 @@ const DEPARTMENTS = [
       },
       {
         id: 'handwrite',
-        name: '手撕',
+        name: '算法',
         icon: '💻',
         iconSrc: '/images/leetcode-heart.png',
         desc: '算法题与 coding 练习',
@@ -235,7 +235,7 @@ const DEPARTMENTS = [
       },
       {
         id: 'project',
-        name: '项目准备',
+        name: '项目',
         icon: '🛠',
         desc: '项目经历、时间线与相关面试题',
         recordView: 'project',

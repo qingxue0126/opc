@@ -23,6 +23,8 @@ const App = {
   calendarYear: null,
   calendarMonth: null,
   calendarViewDate: null,
+  navExpanded: null, // Set<deptId> 侧栏展开的部门
+  _scrollToAccordionModule: null,
 
   init() {
     Store.getRecycleBin();
@@ -70,6 +72,14 @@ const App = {
 
   navigate(view, params = {}) {
     this.route = { view, ...params };
+    if (
+      (view === 'dept' || view === 'module') &&
+      this.route.deptId &&
+      this.isNavExpandable(this.route.deptId)
+    ) {
+      this.navExpanded = this.navExpanded || new Set();
+      this.navExpanded.add(this.route.deptId);
+    }
     this.renderNav();
     this.render();
   },
@@ -205,68 +215,149 @@ const App = {
     });
   },
 
+  ensureNavExpanded() {
+    this.navExpanded = this.navExpanded || new Set();
+  },
+
+  isNavDeptExpanded(deptId) {
+    this.navExpanded = this.navExpanded || new Set();
+    return this.navExpanded.has(deptId);
+  },
+
+  toggleNavDept(deptId) {
+    this.navExpanded = this.navExpanded || new Set();
+    if (this.navExpanded.has(deptId)) this.navExpanded.delete(deptId);
+    else this.navExpanded.add(deptId);
+  },
+
+  navigateToDept(deptId) {
+    const dept = getDepartment(deptId);
+    if (!dept) return;
+    this.navExpanded = this.navExpanded || new Set();
+    this.navExpanded.add(deptId);
+    this.navFocusModule = null;
+    if (dept.layout === 'pages' && dept.modules[0]) {
+      this.navigate('module', { deptId: dept.id, moduleId: dept.modules[0].id });
+    } else {
+      this.navigate('dept', { deptId: dept.id });
+    }
+  },
+
+  navigateToModule(deptId, moduleId) {
+    const dept = getDepartment(deptId);
+    if (!dept) return;
+    this.navExpanded = this.navExpanded || new Set();
+    this.navExpanded.add(deptId);
+    this.navFocusModule = { deptId, moduleId };
+    if (dept.layout === 'accordion') {
+      this.setDeptExpanded(deptId, moduleId, true);
+      this._scrollToAccordionModule = moduleId;
+      this.navigate('dept', { deptId });
+      return;
+    }
+    this.navigate('module', { deptId, moduleId });
+  },
+
+  isNavExpandable(deptId) {
+    const dept = getDepartment(deptId);
+    return dept?.layout === 'pages';
+  },
+
   renderNav() {
     const nav = document.getElementById('nav');
-    const items = [
-      { view: 'home', label: '总览', color: '#4F46E5' },
-      ...DEPARTMENTS.map((d) => {
-        const dept = getDeptBase(d.id);
-        return {
-          view: 'dept',
-          deptId: d.id,
-          label: `${dept.order} ${dept.name}`,
-          color: dept.color,
-        };
-      }),
+    this.ensureNavExpanded();
+
+    const homeActive = this.route.view === 'home';
+    const parts = [
+      `<button class="nav-item ${homeActive ? 'active' : ''}" data-view="home">
+        <span class="nav-label">总览</span>
+      </button>`,
     ];
 
-    nav.innerHTML = items
-      .map((item) => {
-        const active =
-          (item.view === 'home' && this.route.view === 'home') ||
-          (item.view === 'dept' &&
-            ((this.route.view === 'dept' && this.route.deptId === item.deptId) ||
-              (this.route.view === 'module' && this.route.deptId === item.deptId)));
+    DEPARTMENTS.forEach((d) => {
+      const dept = getDepartment(d.id);
+      if (!dept) return;
+      const expandable = this.isNavExpandable(dept.id);
+      const onDept =
+        (this.route.view === 'dept' || this.route.view === 'module') &&
+        this.route.deptId === dept.id;
+      const expanded = expandable && this.isNavDeptExpanded(dept.id);
+      const deptActive = expandable
+        ? onDept && this.route.view === 'dept'
+        : onDept;
 
-        if (item.view === 'home') {
-          return `
-            <button class="nav-item ${active ? 'active' : ''}"
-              data-view="${item.view}">
-              <span class="nav-dot" style="background:${item.color}"></span>
-              <span class="nav-label">${item.label}</span>
-            </button>`;
-        }
+      let subHtml = '';
+      if (expandable) {
+        const subItems = (dept.modules || [])
+          .map((m) => {
+            const mod = getModule(dept.id, m.id);
+            if (!mod) return '';
+            const subActive =
+              this.route.view === 'module' &&
+              this.route.deptId === dept.id &&
+              this.route.moduleId === mod.id;
+            return `
+              <button type="button" class="nav-sub-item ${subActive ? 'active' : ''}"
+                data-dept="${dept.id}" data-module="${mod.id}">
+                <span class="nav-sub-label">${this.escapeHtml(mod.name)}</span>
+              </button>`;
+          })
+          .join('');
+        subHtml = `<div class="nav-sub${expanded ? '' : ' is-collapsed'}">${subItems}</div>`;
+      }
 
-        return `
-          <div class="nav-item-row ${active ? 'active' : ''}">
-            <button class="nav-item" data-view="${item.view}" data-dept="${item.deptId}">
-              <span class="nav-dot" style="background:${item.color}"></span>
-              <span class="nav-label">${this.escapeHtml(item.label)}</span>
-            </button>
-            <button type="button" class="nav-edit-dept" title="编辑部门" data-dept="${item.deptId}">✎</button>
-          </div>`;
-      })
-      .join('');
+      const chevron = expandable
+        ? `<span class="nav-chevron" aria-hidden="true">
+              <svg viewBox="0 0 12 12" width="12" height="12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M2.5 7.5L6 4l3.5 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </span>`
+        : '';
 
-    nav.querySelectorAll('.nav-item').forEach((btn) => {
+      parts.push(`
+        <div class="nav-group ${expanded ? 'is-expanded' : ''} ${onDept ? 'is-current' : ''}${expandable ? ' is-expandable' : ''}" data-dept="${dept.id}">
+          <button type="button" class="nav-item nav-dept ${deptActive ? 'active' : ''}" data-dept="${dept.id}"${expandable ? ` aria-expanded="${expanded ? 'true' : 'false'}"` : ''}>
+            <span class="nav-label">${this.escapeHtml(dept.name)}</span>
+            ${chevron}
+          </button>
+          ${subHtml}
+        </div>`);
+    });
+
+    nav.innerHTML = parts.join('');
+
+    nav.querySelector('[data-view="home"]')?.addEventListener('click', () => {
+      this.navFocusModule = null;
+      this.navigate('home');
+    });
+
+    nav.querySelectorAll('.nav-dept').forEach((btn) => {
       btn.addEventListener('click', () => {
-        const view = btn.dataset.view;
-        if (view === 'home') this.navigate('home');
-        else {
-          const dept = getDepartment(btn.dataset.dept);
-          if (dept?.layout === 'pages' && dept.modules[0]) {
-            this.navigate('module', { deptId: dept.id, moduleId: dept.modules[0].id });
-          } else {
-            this.navigate('dept', { deptId: btn.dataset.dept });
-          }
+        const deptId = btn.dataset.dept;
+        if (!this.isNavExpandable(deptId)) {
+          this.navigateToDept(deptId);
+          return;
         }
+        if (this.isNavDeptExpanded(deptId)) {
+          this.toggleNavDept(deptId);
+          this.renderNav();
+          return;
+        }
+        const onDept =
+          (this.route.view === 'dept' || this.route.view === 'module') &&
+          this.route.deptId === deptId;
+        if (onDept) {
+          this.navExpanded.add(deptId);
+          this.renderNav();
+          return;
+        }
+        this.navigateToDept(deptId);
       });
     });
 
-    nav.querySelectorAll('.nav-edit-dept').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.openDeptEditModal(btn.dataset.dept);
+    nav.querySelectorAll('.nav-sub-item').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.navigateToModule(btn.dataset.dept, btn.dataset.module);
       });
     });
   },
@@ -1636,7 +1727,7 @@ const App = {
                 })
                 .join('')}
             </div>`
-          : '<div class="empty-state empty-inline">还没有算法题，请先在「手撕」中添加</div>';
+          : '<div class="empty-state empty-inline">还没有算法题，请先在「算法」中添加</div>';
       } else if (activeKind === 'project') {
         const records = Store.getSortedRecords('core', 'project').map((r) => this.normalizeProjectRecord(r));
         body = records.length
@@ -1656,7 +1747,7 @@ const App = {
                 })
                 .join('')}
             </div>`
-          : '<div class="empty-state empty-inline">还没有项目经历，请先在「项目准备」中添加</div>';
+          : '<div class="empty-state empty-inline">还没有项目经历，请先在「项目」中添加</div>';
       }
 
       form.innerHTML = `
@@ -9068,6 +9159,18 @@ const App = {
         toggleItem(btn.closest('.accordion-item'));
       });
     });
+
+    if (this._scrollToAccordionModule) {
+      const target = document.querySelector(
+        `.accordion-item[data-dept="${deptId}"][data-module="${this._scrollToAccordionModule}"]`
+      );
+      this._scrollToAccordionModule = null;
+      if (target) {
+        requestAnimationFrame(() => {
+          target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        });
+      }
+    }
 
     document.querySelectorAll('.btn-add-record').forEach((btn) => {
       btn.addEventListener('click', (e) => {
