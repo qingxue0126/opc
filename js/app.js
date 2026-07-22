@@ -10,10 +10,10 @@ const App = {
   sleepMonthMetric: 'total', // total | long | nap
   studyViewMode: 'day', // day | week | month
   studyViewAnchor: null, // YYYY-MM-DD
-  planScope: 'daily', // 左栏计划：daily | weekly | monthly
-  planStatsScope: 'weekly', // 右栏统计：daily | weekly | monthly
+  planColumnScope: { plan: 'daily', done: 'daily', timeline: 'daily' }, // 各模块独立：daily | weekly | monthly
+  planColumnAnchor: { plan: null, done: null, timeline: null }, // 各模块独立锚点 YYYY-MM-DD
+  planStatsScope: 'weekly', // 统计：daily | weekly | monthly
   planStatsAnchor: null, // 统计锚点 YYYY-MM-DD
-  planListAnchor: null, // To do / Done / 时间线锚点 YYYY-MM-DD
   planSheetColumn: null, // null | 'plan' | 'done' | 'timeline'
   planSheetKey: null,
   planSheetPriority: 'none', // none | high | medium | low
@@ -671,18 +671,13 @@ const App = {
   },
 
   renderPlanModule() {
-    const planType =
-      this.planScope === 'weekly' || this.planScope === 'monthly' ? this.planScope : 'daily';
-    const listAnchor = this.getPlanListAnchor();
-    const timeline = Store.getPlanTimeline(planType, listAnchor);
-    const currentItems = (timeline.today.items || []).map((item) => Store.resolvePlanItem(item));
-    const todoToday = currentItems.filter((item) => !item.done);
-    const doneToday = currentItems.filter((item) => item.done);
-    const todoCount = todoToday.length;
-    const doneCount = doneToday.length;
-    const todoEmpty = '还没有待办';
-    const doneEmpty = '还没有完成项';
-    const listNav = this.renderPlanListNav(planType, listAnchor);
+    const sheetCol = this.planSheetColumn;
+    const scopeTabs = (active, attr = 'data-plan-scope') => `
+      <div class="plan-scope-tabs" role="tablist">
+        <button type="button" class="plan-scope-tab ${active === 'daily' ? 'is-active' : ''}" ${attr}="daily">日</button>
+        <button type="button" class="plan-scope-tab ${active === 'weekly' ? 'is-active' : ''}" ${attr}="weekly">周</button>
+        <button type="button" class="plan-scope-tab ${active === 'monthly' ? 'is-active' : ''}" ${attr}="monthly">月</button>
+      </div>`;
 
     const renderBucket = (bucket, opts = {}) => {
       const items = (bucket.items || []).map((item) =>
@@ -713,58 +708,89 @@ const App = {
         </div>`;
     };
 
+    const planType = this.getPlanColumnScope('plan');
+    const planAnchor = this.getPlanListAnchor('plan');
+    const planTimeline = Store.getPlanTimeline(planType, planAnchor);
+    const planItems = (planTimeline.today.items || []).map((item) => Store.resolvePlanItem(item));
+    const todoToday = planItems.filter((item) => !item.done);
+    const todoCount = todoToday.length;
+
+    const doneType = this.getPlanColumnScope('done');
+    const doneAnchor = this.getPlanListAnchor('done');
+    const doneTimeline = Store.getPlanTimeline(doneType, doneAnchor);
+    const doneItems = (doneTimeline.today.items || []).map((item) => Store.resolvePlanItem(item));
+    const doneToday = doneItems.filter((item) => item.done);
+    const doneCount = doneToday.length;
+
+    const timelineType = this.getPlanColumnScope('timeline');
+    const timelineAnchor = this.getPlanListAnchor('timeline');
+    const timelinePack = Store.getPlanTimeline(timelineType, timelineAnchor);
+    const moments = Store.getPlanMoments(timelineType, timelinePack.today.key);
+
     const renderTodoBody = () => {
       if (!todoToday.length) {
-        return `<div class="plan-bucket" data-plan-key="${this.escapeHtml(timeline.today.key)}">
-          <ul class="plan-list"><li class="plan-empty">${todoEmpty}</li></ul>
+        return `<div class="plan-bucket" data-plan-key="${this.escapeHtml(planTimeline.today.key)}">
+          <ul class="plan-list"><li class="plan-empty">还没有待办</li></ul>
         </div>`;
       }
       return renderBucket(
-        { key: timeline.today.key, label: '', items: todoToday },
+        { key: planTimeline.today.key, label: '', items: todoToday },
         { hideLabel: true }
       );
     };
 
     const renderDoneBody = () => {
       if (!doneToday.length) {
-        return `<div class="plan-bucket" data-plan-key="${this.escapeHtml(timeline.today.key)}">
-          <ul class="plan-list"><li class="plan-empty">${doneEmpty}</li></ul>
+        return `<div class="plan-bucket" data-plan-key="${this.escapeHtml(doneTimeline.today.key)}">
+          <ul class="plan-list"><li class="plan-empty">还没有完成项</li></ul>
         </div>`;
       }
       return renderBucket(
-        { key: timeline.today.key, label: '', items: doneToday },
+        { key: doneTimeline.today.key, label: '', items: doneToday },
         { hideLabel: true }
       );
     };
 
-    const moments = Store.getPlanMoments(planType, timeline.today.key);
     const renderMomentBody = () => {
       if (!moments.length) {
-        return `<ul class="plan-moment-list"><li class="plan-empty">还没有时间点记录</li></ul>`;
+        return `<ul class="plan-moment-list plan-moment-timeline"><li class="plan-empty">还没有时间点记录</li></ul>`;
       }
-      return `<ul class="plan-moment-list">${moments
-        .map(
-          (m) => `
-        <li class="plan-moment-item" data-moment-id="${this.escapeHtml(m.id)}">
-          <span class="plan-moment-time">${this.escapeHtml(m.time || '--:--')}</span>
-          <div class="plan-moment-main">
-            <span class="plan-moment-text">${this.escapeHtml(m.text)}</span>
-            ${m.note ? `<span class="plan-moment-note">${this.escapeHtml(m.note)}</span>` : ''}
-          </div>
-          <button type="button" class="icon-btn btn-plan-moment-del" title="删除">×</button>
-        </li>`
-        )
+      return `<ul class="plan-moment-list plan-moment-timeline">${moments
+        .map((m, i) => {
+          const tone = this.planMomentTone(i, m.text);
+          const start = m.time || '--:--';
+          const end = m.endTime || m.time || '';
+          const isRange = Boolean(end && end !== start);
+          const note = String(m.note || '').trim();
+          const card = `
+          <div class="plan-moment-card">
+            <div class="plan-moment-main">
+              <span class="plan-moment-text">${this.escapeHtml(m.text)}</span>
+              ${note ? `<span class="plan-moment-note">${this.escapeHtml(note)}</span>` : ''}
+            </div>
+            <button type="button" class="plan-moment-more btn-plan-moment-more" title="编辑" aria-label="编辑时间点">⋯</button>
+          </div>`;
+          if (isRange) {
+            return `
+        <li class="plan-moment-item tone-${tone}${m.done ? ' is-done' : ''} is-range" data-moment-id="${this.escapeHtml(m.id)}">
+          <span class="plan-moment-time-pill is-start">${this.escapeHtml(start)}</span>
+          <span class="plan-moment-axis plan-moment-axis-range" aria-hidden="true">
+            <span class="plan-moment-dot is-start"></span>
+            <span class="plan-moment-dot is-end"></span>
+          </span>
+          ${card}
+          <span class="plan-moment-time-pill is-end">${this.escapeHtml(end)}</span>
+        </li>`;
+          }
+          return `
+        <li class="plan-moment-item tone-${tone}${m.done ? ' is-done' : ''}" data-moment-id="${this.escapeHtml(m.id)}">
+          <span class="plan-moment-time-pill">${this.escapeHtml(start)}</span>
+          <span class="plan-moment-axis" aria-hidden="true"><span class="plan-moment-dot"></span></span>
+          ${card}
+        </li>`;
+        })
         .join('')}</ul>`;
     };
-
-    const scopeTabs = (active, attr) => `
-      <div class="plan-scope-tabs" role="tablist">
-        <button type="button" class="plan-scope-tab ${active === 'daily' ? 'is-active' : ''}" ${attr}="daily">日</button>
-        <button type="button" class="plan-scope-tab ${active === 'weekly' ? 'is-active' : ''}" ${attr}="weekly">周</button>
-        <button type="button" class="plan-scope-tab ${active === 'monthly' ? 'is-active' : ''}" ${attr}="monthly">月</button>
-      </div>`;
-
-    const sheetCol = this.planSheetColumn;
 
     return `
       <div class="plan-module-grid">
@@ -774,9 +800,9 @@ const App = {
               <h3 class="plan-module-title">To do List</h3>
               <p class="plan-module-sub">${todoCount ? `${todoCount} 项待完成` : '待完成'}</p>
             </div>
-            ${scopeTabs(planType, 'data-plan-scope')}
+            ${scopeTabs(planType)}
           </div>
-          ${listNav}
+          ${this.renderPlanListNav(planType, planAnchor, 'plan')}
           <div class="plan-timeline plan-todo-list">
             ${renderTodoBody()}
           </div>
@@ -787,15 +813,15 @@ const App = {
           </button>
           ${sheetCol === 'plan' ? this.renderPlanSheet(planType) : ''}
         </section>
-        <section class="plan-module plan-done-module" data-plan-column="done" data-plan-type="${planType}">
+        <section class="plan-module plan-done-module" data-plan-column="done" data-plan-type="${doneType}">
           <div class="plan-module-head">
             <div>
               <h3 class="plan-module-title">Done List</h3>
               <p class="plan-module-sub">${doneCount ? `已完成 ${doneCount}` : '已完成'}</p>
             </div>
-            ${scopeTabs(planType, 'data-plan-scope')}
+            ${scopeTabs(doneType)}
           </div>
-          ${listNav}
+          ${this.renderPlanListNav(doneType, doneAnchor, 'done')}
           <div class="plan-timeline plan-done-list">
             ${renderDoneBody()}
           </div>
@@ -804,17 +830,17 @@ const App = {
               <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
             </svg>
           </button>
-          ${sheetCol === 'done' ? this.renderPlanSheet(planType) : ''}
+          ${sheetCol === 'done' ? this.renderPlanSheet(doneType) : ''}
         </section>
-        <section class="plan-module plan-timeline-module" data-plan-column="timeline" data-plan-type="${planType}">
+        <section class="plan-module plan-timeline-module" data-plan-column="timeline" data-plan-type="${timelineType}">
           <div class="plan-module-head">
             <div>
               <h3 class="plan-module-title">时间线</h3>
               <p class="plan-module-sub">${moments.length ? `${moments.length} 个时间点` : '时间点记录'}</p>
             </div>
-            ${scopeTabs(planType, 'data-plan-scope')}
+            ${scopeTabs(timelineType)}
           </div>
-          ${listNav}
+          ${this.renderPlanListNav(timelineType, timelineAnchor, 'timeline')}
           <div class="plan-timeline plan-timeline-body">
             ${renderMomentBody()}
           </div>
@@ -823,7 +849,7 @@ const App = {
               <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
             </svg>
           </button>
-          ${sheetCol === 'timeline' ? this.renderTimelineSheet(planType) : ''}
+          ${sheetCol === 'timeline' ? this.renderTimelineSheet(timelineType) : ''}
         </section>
         <section class="plan-module plan-stats-module" data-plan-column="stats">
           <div class="plan-module-head">
@@ -840,14 +866,49 @@ const App = {
       </div>`;
   },
 
-  getPlanListAnchor() {
-    if (this.planListAnchor && /^\d{4}-\d{2}-\d{2}$/.test(this.planListAnchor)) {
-      return this.planListAnchor;
+  normalizePlanScope(scope) {
+    return scope === 'weekly' || scope === 'monthly' ? scope : 'daily';
+  },
+
+  normalizePlanColumn(column) {
+    return column === 'done' || column === 'timeline' ? column : 'plan';
+  },
+
+  getPlanColumnScope(column = 'plan') {
+    const col = this.normalizePlanColumn(column);
+    if (!this.planColumnScope) {
+      this.planColumnScope = { plan: 'daily', done: 'daily', timeline: 'daily' };
     }
+    return this.normalizePlanScope(this.planColumnScope[col]);
+  },
+
+  setPlanColumnScope(column, scope) {
+    const col = this.normalizePlanColumn(column);
+    if (!this.planColumnScope) {
+      this.planColumnScope = { plan: 'daily', done: 'daily', timeline: 'daily' };
+    }
+    this.planColumnScope[col] = this.normalizePlanScope(scope);
+  },
+
+  getPlanListAnchor(column = 'plan') {
+    const col = this.normalizePlanColumn(column);
+    if (!this.planColumnAnchor) {
+      this.planColumnAnchor = { plan: null, done: null, timeline: null };
+    }
+    const anchor = this.planColumnAnchor[col];
+    if (anchor && /^\d{4}-\d{2}-\d{2}$/.test(anchor)) return anchor;
     return todayStr();
   },
 
-  getPlanListRangeLabel(planType, anchor = this.getPlanListAnchor()) {
+  setPlanListAnchor(column, anchor) {
+    const col = this.normalizePlanColumn(column);
+    if (!this.planColumnAnchor) {
+      this.planColumnAnchor = { plan: null, done: null, timeline: null };
+    }
+    this.planColumnAnchor[col] = anchor;
+  },
+
+  getPlanListRangeLabel(planType, anchor) {
     if (planType === 'weekly') {
       const wk = Store.weekKey(new Date(`${anchor}T00:00:00`));
       const range = String(Store.weekRangeLabel(wk) || wk).replace(/\//g, '.');
@@ -862,30 +923,44 @@ const App = {
     return anchor === todayStr() ? `${label}（今天）` : label;
   },
 
-  shiftPlanListAnchor(delta) {
-    const mode =
-      this.planScope === 'weekly' || this.planScope === 'monthly' ? this.planScope : 'daily';
-    const anchor = this.getPlanListAnchor();
+  planMomentTone(index, text) {
+    const t = String(text || '');
+    if (/睡|午休|午睡|床/.test(t)) return 'pink';
+    if (/读|书|学|语录|笔记/.test(t)) return 'pink';
+    if (/衣|柜|买|霜|护肤|洗/.test(t)) return /霜|护肤|洗/.test(t) ? 'green' : 'pink';
+    if (/早|餐|吃|喝|咖啡/.test(t)) return 'blue';
+    const tones = ['blue', 'green', 'pink'];
+    return tones[Math.abs(index) % tones.length];
+  },
+
+  shiftPlanListAnchor(column, delta) {
+    const col = this.normalizePlanColumn(column);
+    const mode = this.getPlanColumnScope(col);
+    const anchor = this.getPlanListAnchor(col);
     if (mode === 'daily') {
-      this.planListAnchor = Store.shiftPlanKey('daily', anchor, delta);
+      this.setPlanListAnchor(col, Store.shiftPlanKey('daily', anchor, delta));
     } else if (mode === 'monthly') {
       const mk = Store.monthKey(new Date(`${anchor}T00:00:00`));
-      this.planListAnchor = `${Store.shiftPlanKey('monthly', mk, delta)}-01`;
+      this.setPlanListAnchor(col, `${Store.shiftPlanKey('monthly', mk, delta)}-01`);
     } else {
       const wk = Store.weekKey(new Date(`${anchor}T00:00:00`));
-      this.planListAnchor = Store.getPlanWeekTracker(Store.shiftPlanKey('weekly', wk, delta)).days[0];
+      this.setPlanListAnchor(
+        col,
+        Store.getPlanWeekTracker(Store.shiftPlanKey('weekly', wk, delta)).days[0]
+      );
     }
   },
 
-  renderPlanListNav(planType, anchor = this.getPlanListAnchor()) {
+  renderPlanListNav(planType, anchor, column = 'plan') {
+    const col = this.normalizePlanColumn(column);
     const range = this.getPlanListRangeLabel(planType, anchor);
     const prevTitle = planType === 'monthly' ? '上一月' : planType === 'weekly' ? '上一周' : '前一天';
     const nextTitle = planType === 'monthly' ? '下一月' : planType === 'weekly' ? '下一周' : '后一天';
     return `
-      <div class="plan-stats-nav plan-list-nav" role="group" aria-label="切换时间">
-        <button type="button" class="plan-stats-chevron-btn btn-plan-list-prev" title="${prevTitle}" aria-label="${prevTitle}">${this.chevronIcon('prev')}</button>
+      <div class="plan-stats-nav plan-list-nav" role="group" aria-label="切换时间" data-plan-column="${col}">
+        <button type="button" class="plan-stats-chevron-btn btn-plan-list-prev" data-plan-column="${col}" title="${prevTitle}" aria-label="${prevTitle}">${this.chevronIcon('prev')}</button>
         <span class="plan-stats-range">${this.escapeHtml(range)}</span>
-        <button type="button" class="plan-stats-chevron-btn btn-plan-list-next" title="${nextTitle}" aria-label="${nextTitle}">${this.chevronIcon('next')}</button>
+        <button type="button" class="plan-stats-chevron-btn btn-plan-list-next" data-plan-column="${col}" title="${nextTitle}" aria-label="${nextTitle}">${this.chevronIcon('next')}</button>
       </div>`;
   },
 
@@ -1175,21 +1250,31 @@ const App = {
 
   renderTimelineSheet(type) {
     const key = this.planSheetKey || Store.currentPlanKey(type);
+    const editId = this.planSheetEditId || '';
+    const editing = editId
+      ? Store.getPlanMoments(type, this.planSheetOriginKey || key).find((m) => m.id === editId) ||
+        Store.getPlanMoments(type, key).find((m) => m.id === editId)
+      : null;
     const chip = Store.planChipLabel(type, key);
     const now = new Date();
-    const timeValue = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const nowTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const startValue = editing?.time || nowTime;
+    const endValue =
+      editing && editing.endTime && editing.endTime !== editing.time ? editing.endTime : '';
+    const titleValue = editing ? String(editing.text || '') : '';
+    const noteValue = editing ? String(editing.note || '') : '';
     const iconCal = `<svg class="plan-sheet-svg" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13.5" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M2.5 8h15" stroke="currentColor" stroke-width="1.6"/><path d="M6.5 2.2v2.6M13.5 2.2v2.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><rect x="5.2" y="10.2" width="2.2" height="2.2" rx="0.4" fill="currentColor"/><rect x="8.9" y="10.2" width="2.2" height="2.2" rx="0.4" fill="currentColor"/><rect x="12.6" y="10.2" width="2.2" height="2.2" rx="0.4" fill="currentColor"/></svg>`;
     const iconSend = `<svg class="plan-sheet-svg plan-sheet-svg-send" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15.2V5.4M6.4 8.8 10 5.2l3.6 3.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
     return `
       <div class="plan-sheet-overlay">
-        <div class="plan-sheet plan-sheet-timeline" data-sheet-mode="timeline" data-plan-type="${type}" data-plan-key="${this.escapeHtml(key)}" role="dialog" aria-label="添加时间点">
+        <div class="plan-sheet plan-sheet-timeline" data-sheet-mode="timeline" data-plan-type="${type}" data-plan-key="${this.escapeHtml(key)}" data-edit-id="${this.escapeHtml(editId)}" role="dialog" aria-label="${editId ? '编辑时间点' : '添加时间点'}">
           <div class="plan-sheet-body">
             <div class="plan-sheet-fields">
               <div class="plan-sheet-title-wrap">
-                <input type="text" class="plan-sheet-title plan-sheet-input" maxlength="200" placeholder="当时在做什么..." autocomplete="off" value="">
+                <input type="text" class="plan-sheet-title plan-sheet-input" maxlength="200" placeholder="当时在做什么..." autocomplete="off" value="${this.escapeHtml(titleValue)}">
               </div>
               <div class="plan-sheet-divider" aria-hidden="true"></div>
-              <textarea class="plan-sheet-desc" rows="2" maxlength="500" placeholder="补充说明（可选）" autocomplete="off"></textarea>
+              <textarea class="plan-sheet-desc" rows="2" maxlength="500" placeholder="补充说明（可选）" autocomplete="off">${this.escapeHtml(noteValue)}</textarea>
             </div>
           </div>
           <div class="plan-sheet-toolbar">
@@ -1201,12 +1286,19 @@ const App = {
                 </button>
                 <div class="plan-sheet-picker hidden" role="dialog" aria-label="选择日期"></div>
               </div>
-              <label class="plan-moment-time-wrap" title="时间点">
-                <input type="time" class="plan-moment-time-input" value="${timeValue}" aria-label="时间点">
-              </label>
+              <div class="plan-moment-time-range" role="group" aria-label="时间范围">
+                <input type="time" class="plan-moment-time-start" value="${this.escapeHtml(startValue)}" aria-label="起始时间" required>
+                <span class="plan-moment-time-sep" aria-hidden="true">–</span>
+                <input type="time" class="plan-moment-time-end" value="${this.escapeHtml(endValue)}" aria-label="结束时间（可选，不填则与起始相同）" title="结束时间（可选）">
+              </div>
+              ${
+                editId
+                  ? `<button type="button" class="plan-sheet-icon plan-moment-sheet-delete" title="删除" aria-label="删除">删除</button>`
+                  : ''
+              }
             </div>
             <div class="plan-sheet-tools-right">
-              <button type="button" class="plan-sheet-send" title="添加">${iconSend}</button>
+              <button type="button" class="plan-sheet-send" title="${editId ? '保存' : '添加'}">${iconSend}</button>
             </div>
           </div>
         </div>
@@ -1364,10 +1456,9 @@ const App = {
   },
 
   openPlanSheet(column = 'plan') {
-    const planType =
-      this.planScope === 'weekly' || this.planScope === 'monthly' ? this.planScope : 'daily';
-    const timeline = Store.getPlanTimeline(planType, this.getPlanListAnchor());
-    const col = column === 'done' || column === 'timeline' ? column : 'plan';
+    const col = this.normalizePlanColumn(column);
+    const planType = this.getPlanColumnScope(col);
+    const timeline = Store.getPlanTimeline(planType, this.getPlanListAnchor(col));
     this.planSheetColumn = col;
     this.planSheetKey = timeline.today.key || Store.currentPlanKey(planType);
     this.planSheetPriority = 'none';
@@ -1378,12 +1469,29 @@ const App = {
     this.render();
   },
 
-  openPlanSheetEdit(type, key, itemId) {
+  openPlanMomentEdit(momentId) {
+    const planType = this.getPlanColumnScope('timeline');
+    const timeline = Store.getPlanTimeline(planType, this.getPlanListAnchor('timeline'));
+    const key = timeline.today.key || Store.currentPlanKey(planType);
+    const moment = Store.getPlanMoments(planType, key).find((m) => m.id === momentId);
+    if (!moment) return;
+    this.planSheetColumn = 'timeline';
+    this.planSheetKey = key;
+    this.planSheetOriginKey = key;
+    this.planSheetEditId = momentId;
+    this.planSheetPriority = 'none';
+    this.planSheetParentId = null;
+    this.planEditingId = null;
+    this.render();
+  },
+
+  openPlanSheetEdit(type, key, itemId, column = 'plan') {
     const items = Store.getPlanItems(type, key);
     const found = Store.findPlanItem(items, itemId);
     if (!found) return;
     const item = found.item;
-    this.planSheetColumn = 'plan';
+    const col = column === 'done' ? 'done' : 'plan';
+    this.planSheetColumn = col;
     this.planSheetKey = key;
     this.planSheetOriginKey = key;
     this.planSheetEditId = itemId;
@@ -2121,10 +2229,13 @@ const App = {
       btn.addEventListener('click', () => {
         const scope = btn.dataset.planScope;
         if (scope !== 'daily' && scope !== 'weekly' && scope !== 'monthly') return;
-        if (scope === this.planScope) return;
-        this.planScope = scope;
-        this.planListAnchor = todayStr();
-        this.planSheetColumn = null;
+        const column = this.normalizePlanColumn(
+          btn.closest('.plan-module')?.dataset?.planColumn || 'plan'
+        );
+        if (scope === this.getPlanColumnScope(column)) return;
+        this.setPlanColumnScope(column, scope);
+        this.setPlanListAnchor(column, todayStr());
+        if (this.planSheetColumn === column) this.planSheetColumn = null;
         this.planEditingId = null;
         this.render();
       });
@@ -2133,14 +2244,20 @@ const App = {
     document.querySelectorAll('.btn-plan-list-prev').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.shiftPlanListAnchor(-1);
+        const column = this.normalizePlanColumn(
+          btn.dataset.planColumn || btn.closest('.plan-module')?.dataset?.planColumn || 'plan'
+        );
+        this.shiftPlanListAnchor(column, -1);
         this.render();
       });
     });
     document.querySelectorAll('.btn-plan-list-next').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.shiftPlanListAnchor(1);
+        const column = this.normalizePlanColumn(
+          btn.dataset.planColumn || btn.closest('.plan-module')?.dataset?.planColumn || 'plan'
+        );
+        this.shiftPlanListAnchor(column, 1);
         this.render();
       });
     });
@@ -2198,17 +2315,13 @@ const App = {
       });
     });
 
-    document.querySelectorAll('.btn-plan-moment-del').forEach((btn) => {
+    document.querySelectorAll('.btn-plan-moment-more').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const item = btn.closest('.plan-moment-item');
-        const moduleEl = btn.closest('.plan-module');
-        const type = moduleEl?.dataset.planType || 'daily';
-        const key = Store.getPlanTimeline(type, this.getPlanListAnchor()).today.key;
         const id = item?.dataset.momentId;
-        if (!id || !key) return;
-        Store.deletePlanMoment(type, key, id);
-        this.render();
+        if (!id) return;
+        this.openPlanMomentEdit(id);
       });
     });
 
@@ -2236,7 +2349,12 @@ const App = {
           const item = btn.closest('.plan-item');
           const ctx = ctxOf(item);
           if (!item || !ctx) return;
-          this.openPlanSheetEdit(ctx.type, ctx.key, item.dataset.id);
+          this.openPlanSheetEdit(
+            ctx.type,
+            ctx.key,
+            item.dataset.id,
+            moduleEl.dataset.planColumn || 'plan'
+          );
         });
       });
 
@@ -2829,7 +2947,8 @@ const App = {
     const type = sheet.dataset.planType || 'daily';
     const input = sheet.querySelector('.plan-sheet-title');
     const desc = sheet.querySelector('.plan-sheet-desc');
-    const timeInput = sheet.querySelector('.plan-moment-time-input');
+    const startInput = sheet.querySelector('.plan-moment-time-start');
+    const endInput = sheet.querySelector('.plan-moment-time-end');
     const dateBtn = sheet.querySelector('.plan-sheet-date');
     const picker = sheet.querySelector('.plan-sheet-picker');
     let pickerViewKey =
@@ -2885,16 +3004,37 @@ const App = {
       });
     };
 
+    const readTimes = () => {
+      const time = String(startInput?.value || '').slice(0, 5);
+      const endTime = String(endInput?.value || '').slice(0, 5);
+      return Store.normalizePlanMomentTimes(time, endTime);
+    };
+
     const submit = () => {
       const key = this.planSheetKey || Store.currentPlanKey(type);
+      const editId = this.planSheetEditId || sheet.dataset.editId || '';
+      const originKey = this.planSheetOriginKey || key;
       const text = String(input?.value || '').trim();
       const note = String(desc?.value || '').trim();
-      const time = String(timeInput?.value || '').slice(0, 5);
+      const { time, endTime } = readTimes();
       if (!text) {
         input?.focus();
         return;
       }
-      Store.addPlanMoment(type, key, { text, note, time });
+      if (!time) {
+        startInput?.focus();
+        return;
+      }
+      if (editId) {
+        if (originKey !== key) {
+          Store.deletePlanMoment(type, originKey, editId);
+          Store.addPlanMoment(type, key, { text, note, time, endTime });
+        } else {
+          Store.updatePlanMoment(type, key, editId, { text, note, time, endTime });
+        }
+      } else {
+        Store.addPlanMoment(type, key, { text, note, time, endTime });
+      }
       this.closePlanSheet();
     };
 
@@ -2911,6 +3051,14 @@ const App = {
         paintPicker();
         picker.classList.remove('hidden');
       } else closePicker();
+    });
+    sheet.querySelector('.plan-moment-sheet-delete')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const editId = this.planSheetEditId || sheet.dataset.editId || '';
+      const originKey = this.planSheetOriginKey || this.planSheetKey || Store.currentPlanKey(type);
+      if (!editId) return;
+      Store.deletePlanMoment(type, originKey, editId);
+      this.closePlanSheet();
     });
     sheet.querySelector('.plan-sheet-send')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -8636,8 +8784,12 @@ const App = {
           </div>
           <div class="year-cal-head-actions">
             <div class="year-cal-theme-wrap">
-              <button type="button" class="icon-btn btn-year-cal-theme" title="切换视图：${this.escapeHtml(themeMeta.name)}" aria-haspopup="true" aria-expanded="false" aria-label="切换日历视图">
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 6a1 1 0 0 1 1 1v1.07a7.002 7.002 0 0 1 2.9 1.2l.76-.76a1 1 0 1 1 1.41 1.41l-.76.76A7.002 7.002 0 0 1 18.93 13H20a1 1 0 1 1 0 2h-1.07a7.002 7.002 0 0 1-1.2 2.9l.76.76a1 1 0 0 1-1.41 1.41l-.76-.76A7.002 7.002 0 0 1 13 18.93V20a1 1 0 1 1-2 0v-1.07a7.002 7.002 0 0 1-2.9-1.2l-.76.76a1 1 0 0 1-1.41-1.41l.76-.76A7.002 7.002 0 0 1 5.07 15H4a1 1 0 1 1 0-2h1.07a7.002 7.002 0 0 1 1.2-2.9l-.76-.76a1 1 0 0 1 1.41-1.41l.76.76A7.002 7.002 0 0 1 11 8.07V7a1 1 0 0 1 1-1zm0 4a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
+              <button type="button" class="btn-year-cal-theme" title="当前视图：${this.escapeHtml(themeMeta.name)}（点击切换）" aria-haspopup="true" aria-expanded="false" aria-label="当前视图 ${this.escapeHtml(themeMeta.name)}，点击切换">
+                <span class="year-cal-theme-current-icon" aria-hidden="true">${themeMeta.icon || '📋'}</span>
+                <span class="year-cal-theme-current-name">${this.escapeHtml(themeMeta.name || '汇总')}</span>
+                <svg class="year-cal-theme-caret" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" focusable="false">
+                  <path d="M3 4.5L6 8l3-3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
               </button>
               <div class="year-cal-theme-menu hidden" role="menu">
                 <div class="year-cal-theme-menu-title">切换视图</div>

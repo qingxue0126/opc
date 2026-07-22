@@ -4880,29 +4880,180 @@ body {
 .plan-moment-list {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 2px 0 8px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+}
+
+.plan-moment-timeline {
+  position: relative;
+  gap: 0;
+  padding: 4px 0 12px;
+}
+
+.plan-moment-timeline > .plan-empty {
+  margin-left: 0;
 }
 
 .plan-moment-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: #F5F5F5;
+  position: relative;
+  display: grid;
+  grid-template-columns: 52px 18px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 8px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
 }
 
-.plan-moment-time {
-  flex-shrink: 0;
-  min-width: 42px;
-  font-size: 13px;
+.plan-moment-item.is-range {
+  grid-template-rows: auto auto;
+  align-items: center;
+  row-gap: 10px;
+  min-height: 72px;
+}
+
+.plan-moment-time-pill {
+  justify-self: stretch;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 4px 0;
+  border-radius: 999px;
+  background: #E8F5E9;
+  color: #1F2329;
+  font-size: 12px;
   font-weight: 700;
-  color: #388BFF;
-  line-height: 1.4;
+  line-height: 1.2;
   font-variant-numeric: tabular-nums;
+}
+
+.plan-moment-item.is-range .plan-moment-time-pill.is-start {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.plan-moment-item.is-range .plan-moment-time-pill.is-end {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.plan-moment-item.is-range .plan-moment-axis-range {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  box-sizing: border-box;
+}
+
+.plan-moment-item.is-range .plan-moment-card {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  align-self: stretch;
+  margin: 0;
+}
+
+.plan-moment-axis {
+  position: relative;
+  align-self: stretch;
+  display: flex;
+  justify-content: center;
+  min-height: 100%;
+}
+
+.plan-moment-axis::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: #E5E7EB;
+}
+
+.plan-moment-item:first-child .plan-moment-axis::before {
+  top: 50%;
+}
+
+.plan-moment-item:last-child .plan-moment-axis::before {
+  bottom: 50%;
+}
+
+.plan-moment-item:only-child .plan-moment-axis::before {
+  display: none;
+}
+
+.plan-moment-item.is-range:first-child .plan-moment-axis::before {
+  top: 10px;
+}
+
+.plan-moment-item.is-range:last-child .plan-moment-axis::before {
+  bottom: 10px;
+}
+
+.plan-moment-item.is-range:only-child .plan-moment-axis::before {
+  display: block;
+  top: 10px;
+  bottom: 10px;
+}
+
+.plan-moment-dot {
+  position: relative;
+  z-index: 1;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #86C99A;
+  box-sizing: border-box;
+  margin: auto 0;
+  flex-shrink: 0;
+}
+
+.plan-moment-item.is-range .plan-moment-dot {
+  margin: 0;
+}
+
+.plan-moment-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 12px;
+  border-radius: 14px;
+  background: #F3F4F6;
+  margin: 5px 0;
+}
+
+.plan-moment-item.tone-blue .plan-moment-card {
+  background: #E8F1FF;
+}
+
+.plan-moment-item.tone-green .plan-moment-card {
+  background: #E8F5E9;
+}
+
+.plan-moment-item.tone-pink .plan-moment-card {
+  background: #F3E8FF;
+}
+
+.plan-moment-item.is-done {
+  opacity: 0.72;
+}
+
+.plan-moment-item.is-done .plan-moment-text {
+  text-decoration: line-through;
+  color: #6B7280;
 }
 
 .plan-moment-main {
@@ -4910,24 +5061,102 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 .plan-moment-text {
-  font-size: 14px;
-  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  color: #1F2329;
+  line-height: 1.25;
   word-break: break-word;
 }
 
 .plan-moment-note {
-  font-size: 12px;
-  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  color: #8A8F99;
+  line-height: 1.25;
   word-break: break-word;
+}
+
+.plan-moment-more {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #8A8F99;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background .15s ease, color .15s ease;
+}
+
+.plan-moment-more:hover {
+  background: rgba(255, 255, 255, 0.75);
+  color: #1F2329;
+}
+
+.plan-moment-sheet-delete {
+  height: 34px !important;
+  width: auto !important;
+  min-width: max-content !important;
+  flex-shrink: 0 !important;
+  padding: 0 12px !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+  background: #fff !important;
+  color: #EF4444 !important;
+  font: inherit !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+  writing-mode: horizontal-tb !important;
+  cursor: pointer;
+}
+
+.plan-moment-sheet-delete:hover {
+  background: #FEF2F2 !important;
+  border-color: #FECACA !important;
+}
+
+.plan-moment-time-range {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+  gap: 0;
+  height: 34px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  box-sizing: border-box;
+}
+
+.plan-moment-time-sep {
+  flex-shrink: 0;
+  color: #A8A29E;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  margin: 0;
 }
 
 .plan-moment-time-wrap {
   display: inline-flex;
   align-items: center;
+  gap: 6px;
   height: 34px;
   padding: 0 10px;
   border-radius: 8px;
@@ -4935,6 +5164,15 @@ body {
   border: 1px solid var(--border);
 }
 
+.plan-moment-time-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #78716C;
+  line-height: 1;
+}
+
+.plan-moment-time-start,
+.plan-moment-time-end,
 .plan-moment-time-input {
   border: none;
   background: transparent;
@@ -4943,12 +5181,64 @@ body {
   font-weight: 600;
   color: var(--text);
   min-width: 0;
-  width: 108px;
+  width: 58px;
+  max-width: 58px;
   padding: 0;
+  margin: 0;
+  letter-spacing: 0;
 }
 
+.plan-moment-time-start::-webkit-calendar-picker-indicator,
+.plan-moment-time-end::-webkit-calendar-picker-indicator,
+.plan-moment-time-input::-webkit-calendar-picker-indicator {
+  margin: 0;
+  padding: 0;
+  width: 12px;
+  height: 12px;
+  cursor: pointer;
+}
+
+.plan-moment-time-start::-webkit-datetime-edit,
+.plan-moment-time-end::-webkit-datetime-edit,
+.plan-moment-time-input::-webkit-datetime-edit {
+  padding: 0;
+  margin: 0;
+}
+
+.plan-moment-time-start::-webkit-datetime-edit-fields-wrapper,
+.plan-moment-time-end::-webkit-datetime-edit-fields-wrapper,
+.plan-moment-time-input::-webkit-datetime-edit-fields-wrapper {
+  padding: 0;
+  margin: 0;
+}
+
+.plan-moment-time-start:focus,
+.plan-moment-time-end:focus,
 .plan-moment-time-input:focus {
   outline: none;
+}
+
+.plan-sheet-timeline .plan-sheet-toolbar {
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.plan-sheet-timeline .plan-sheet-tools {
+  flex-wrap: nowrap;
+  min-width: 0;
+  gap: 6px;
+}
+
+.plan-sheet-timeline .plan-sheet-date {
+  flex-shrink: 0;
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
+}
+
+.plan-sheet-timeline .plan-sheet-date-text {
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
+  line-height: 1;
 }
 
 .plan-fab {
@@ -5705,6 +5995,15 @@ body {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
+  flex-shrink: 0;
+}
+
+.plan-sheet-date-text {
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
+  line-height: 1;
 }
 
 .plan-sheet-date-icon {
@@ -5939,7 +6238,7 @@ body {
   height: 34px;
   border: none;
   border-radius: 50%;
-  background: #2B64E3;
+  background: #1C1917;
   color: #fff;
   font-size: 16px;
   font-weight: 700;
@@ -5951,7 +6250,7 @@ body {
 }
 
 .plan-sheet-send:hover {
-  background: #1D4ED8;
+  background: #000;
 }
 
 .plan-item-note {
@@ -7394,12 +7693,23 @@ body {
 }
 
 .btn-year-cal-theme {
-  width: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 34px;
   height: 34px;
+  padding: 0 10px;
   border-radius: 8px;
-  color: var(--yc-muted);
+  color: var(--yc-text);
   background: var(--yc-card);
   border: 1px solid var(--yc-border);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
 }
 
 .btn-year-cal-theme:hover,
@@ -7407,6 +7717,24 @@ body {
   color: var(--yc-accent);
   border-color: var(--yc-accent-border);
   background: var(--yc-accent-soft);
+}
+
+.year-cal-theme-current-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+
+.year-cal-theme-current-name {
+  line-height: 1;
+}
+
+.year-cal-theme-caret {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.btn-year-cal-theme[aria-expanded='true'] .year-cal-theme-caret {
+  transform: rotate(180deg);
 }
 
 .year-cal-theme-menu {
@@ -7710,7 +8038,7 @@ body {
   justify-content: center;
   border-radius: 50%;
   border: none;
-  background: #388BFF;
+  background: #1C1917;
   color: #fff;
   line-height: 0;
 }
@@ -7722,7 +8050,7 @@ body {
 
 .btn-year-cal-create:hover,
 .btn-year-cal-create[aria-expanded='true'] {
-  background: #1677FF;
+  background: #000;
   color: #fff;
 }
 

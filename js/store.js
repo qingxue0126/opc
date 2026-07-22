@@ -1800,20 +1800,35 @@ const Store = {
     const bucket = moments[t] || {};
     const list = Array.isArray(bucket[key]) ? bucket[key] : [];
     return list
-      .map((m) => ({
-        id: m.id,
-        text: String(m.text || ''),
-        note: String(m.note || ''),
-        time: String(m.time || '').slice(0, 5),
-        createdAt: m.createdAt || '',
-      }))
+      .map((m) => {
+        const time = String(m.time || '').slice(0, 5);
+        const endRaw = String(m.endTime || '').slice(0, 5);
+        return {
+          id: m.id,
+          text: String(m.text || ''),
+          note: String(m.note || ''),
+          time,
+          endTime: endRaw || time,
+          done: Boolean(m.done),
+          createdAt: m.createdAt || '',
+        };
+      })
       .filter((m) => m.id && m.text)
       .sort((a, b) => {
         const ta = a.time || '99:99';
         const tb = b.time || '99:99';
         if (ta !== tb) return ta.localeCompare(tb);
+        const ea = a.endTime || ta;
+        const eb = b.endTime || tb;
+        if (ea !== eb) return ea.localeCompare(eb);
         return String(a.createdAt).localeCompare(String(b.createdAt));
       });
+  },
+
+  normalizePlanMomentTimes(time = '', endTime = '') {
+    const start = String(time || '').slice(0, 5);
+    const end = String(endTime || '').slice(0, 5) || start;
+    return { time: start, endTime: end };
   },
 
   setPlanMoments(type, key, list) {
@@ -1826,20 +1841,55 @@ const Store = {
     this.save(data);
   },
 
-  addPlanMoment(type, key, { text, note = '', time = '' } = {}) {
+  addPlanMoment(type, key, { text, note = '', time = '', endTime = '' } = {}) {
     const trimmed = String(text || '').trim();
     if (!trimmed) return null;
+    const times = this.normalizePlanMomentTimes(time, endTime);
     const list = this.getPlanMoments(type, key);
     const moment = {
       id: crypto.randomUUID(),
       text: trimmed,
       note: String(note || '').trim(),
-      time: String(time || '').slice(0, 5),
+      time: times.time,
+      endTime: times.endTime,
+      done: false,
       createdAt: new Date().toISOString(),
     };
     list.push(moment);
     this.setPlanMoments(type, key, list);
     return moment;
+  },
+
+  togglePlanMoment(type, key, momentId) {
+    if (!momentId) return;
+    const list = this.getPlanMoments(type, key).map((m) =>
+      m.id === momentId ? { ...m, done: !m.done } : m
+    );
+    this.setPlanMoments(type, key, list);
+  },
+
+  updatePlanMoment(type, key, momentId, patch = {}) {
+    if (!momentId) return null;
+    let updated = null;
+    const list = this.getPlanMoments(type, key).map((m) => {
+      if (m.id !== momentId) return m;
+      const nextTime = patch.time != null ? String(patch.time || '').slice(0, 5) : m.time;
+      const nextEnd =
+        patch.endTime != null ? String(patch.endTime || '').slice(0, 5) : m.endTime || m.time;
+      const times = this.normalizePlanMomentTimes(nextTime, nextEnd);
+      updated = {
+        ...m,
+        text: patch.text != null ? String(patch.text || '').trim() : m.text,
+        note: patch.note != null ? String(patch.note || '').trim() : m.note,
+        time: times.time,
+        endTime: times.endTime,
+        done: patch.done != null ? Boolean(patch.done) : m.done,
+      };
+      return updated;
+    });
+    if (!updated || !updated.text) return null;
+    this.setPlanMoments(type, key, list);
+    return updated;
   },
 
   deletePlanMoment(type, key, momentId) {
