@@ -525,12 +525,7 @@ const App = {
 
       ${this.renderYearCalendar()}
 
-      <div class="section-title">快捷打卡</div>
-      <div class="card-grid" id="cardGrid">
-        ${this.renderCards()}
-      </div>
-
-      <div class="section-title" style="margin-top:28px">四大部门</div>
+      <div class="section-title" style="margin-top:28px">主题分区</div>
       <div class="dept-grid">
         ${DEPARTMENTS.map(
           (d) => {
