@@ -8,6 +8,8 @@ const App = {
   sleepViewMode: 'day', // day | week | month
   sleepViewAnchor: null, // YYYY-MM-DD
   sleepMonthMetric: 'total', // total | long | nap
+  studyViewMode: 'day', // day | week | month
+  studyViewAnchor: null, // YYYY-MM-DD
   calendarYear: null,
   calendarMonth: null,
   calendarViewDate: null,
@@ -1876,6 +1878,7 @@ const App = {
   renderModuleToolbar(m, dept) {
     if (m.recordView === 'habitChecklist' || m.recordView === 'weekdayCheckin') return '';
     if (m.id === 'sleep') return this.renderSleepToolbar(dept);
+    if (m.id === 'study') return this.renderStudyToolbar(dept);
     const sort = Store.getModuleSort(dept.id, m.id);
     return `
       <div class="accordion-toolbar accordion-toolbar-icons">
@@ -2733,6 +2736,281 @@ const App = {
       </div>`;
   },
 
+  /* —— 生活 · 学习时长 —— */
+
+  calcStudyDurationMins(record) {
+    const h = Number(record?.hours);
+    const m = Number(record?.minutes);
+    const hours = Number.isFinite(h) ? Math.max(0, h) : 0;
+    const mins = Number.isFinite(m) ? Math.max(0, Math.min(59, Math.round(m))) : 0;
+    return Math.round(hours * 60 + mins);
+  },
+
+  formatStudyDurationLabel(mins) {
+    if (mins == null || !Number.isFinite(mins) || mins <= 0) return '—';
+    const total = Math.round(mins);
+    const h = Math.floor(total / 60);
+    const m = total % 60;
+    if (!h) return `${m} min`;
+    if (!m) return `${h} h`;
+    return `${h} h ${m} min`;
+  },
+
+  getStudyViewAnchor() {
+    if (this.studyViewAnchor && /^\d{4}-\d{2}-\d{2}$/.test(this.studyViewAnchor)) {
+      return this.studyViewAnchor;
+    }
+    return todayStr();
+  },
+
+  shiftStudyViewAnchor(delta) {
+    const mode = this.studyViewMode || 'day';
+    const anchor = this.getStudyViewAnchor();
+    const d = new Date(`${anchor}T00:00:00`);
+    if (mode === 'week') d.setDate(d.getDate() + delta * 7);
+    else if (mode === 'month') d.setMonth(d.getMonth() + delta);
+    else d.setDate(d.getDate() + delta);
+    this.studyViewAnchor = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  },
+
+  renderStudyToolbar(dept) {
+    const mode = this.studyViewMode || 'day';
+    const anchor = this.getStudyViewAnchor();
+    const rangeCenter =
+      mode === 'week'
+        ? `<div class="sleep-toolbar-range">
+            <button type="button" class="btn btn-ghost btn-sm btn-study-prev" title="上一周">‹</button>
+            <span class="sleep-chart-range">本周 ${this.formatSleepRangeLabel('week', anchor)}</span>
+            <button type="button" class="btn btn-ghost btn-sm btn-study-next" title="下一周">›</button>
+          </div>`
+        : mode === 'month'
+          ? `<div class="sleep-toolbar-range">
+              <button type="button" class="btn btn-ghost btn-sm btn-study-prev" title="上一月">‹</button>
+              <span class="sleep-chart-range">${this.formatSleepRangeLabel('month', anchor)}</span>
+              <button type="button" class="btn btn-ghost btn-sm btn-study-next" title="下一月">›</button>
+            </div>`
+          : `<div class="sleep-toolbar-range is-empty" aria-hidden="true"></div>`;
+    return `
+      <div class="accordion-toolbar accordion-toolbar-icons sleep-toolbar study-toolbar">
+        <div class="sleep-view-tabs" role="tablist">
+          <button type="button" class="sleep-view-tab ${mode === 'day' ? 'is-active' : ''}" data-study-view="day">日</button>
+          <button type="button" class="sleep-view-tab ${mode === 'week' ? 'is-active' : ''}" data-study-view="week">周</button>
+          <button type="button" class="sleep-view-tab ${mode === 'month' ? 'is-active' : ''}" data-study-view="month">月</button>
+        </div>
+        ${rangeCenter}
+        <div class="toolbar-actions">
+          <button type="button" class="icon-btn btn-add-record" title="新增记录"
+            data-dept="${dept.id}" data-module="study">+</button>
+        </div>
+      </div>`;
+  },
+
+  renderStudyModuleBody(deptId, moduleId, mod, dept) {
+    const mode = this.studyViewMode || 'day';
+    const records = Store.getSortedRecords(deptId, moduleId);
+    return `
+      ${this.renderStudyToolbar(dept)}
+      <div class="study-module-body" data-dept="${deptId}" data-module="${moduleId}">
+        ${
+          mode === 'day'
+            ? this.renderStudyDayView(records, deptId, moduleId)
+            : mode === 'week'
+              ? this.renderStudyWeekView(records)
+              : this.renderStudyMonthView(records)
+        }
+      </div>`;
+  },
+
+  renderStudyDayView(records, deptId, moduleId) {
+    if (!records.length) {
+      return '<div class="empty-state empty-inline">还没有记录</div>';
+    }
+    return `
+      <div class="record-list accordion-records study-day-list">
+        ${records.map((r) => this.renderStudyRecordItem(r, deptId, moduleId)).join('')}
+      </div>`;
+  },
+
+  renderStudyRecordItem(record, deptId, moduleId) {
+    const actionAttrs = `data-dept="${deptId}" data-module="${moduleId}" data-id="${record.id}"`;
+    const dateText = formatDate(record.date);
+    const mins = this.calcStudyDurationMins(record);
+    const dur = this.formatStudyDurationLabel(mins);
+    const note = record.note ? this.escapeHtml(String(record.note)) : '';
+    return `
+      <div class="record-item record-item-study">
+        <div class="study-col study-col-date">${this.escapeHtml(dateText)}</div>
+        <div class="study-col study-col-dur">
+          <span class="k">时长</span><span class="v">${this.escapeHtml(dur)}</span>
+        </div>
+        <div class="study-col study-col-note">${note || '<span class="muted">—</span>'}</div>
+        <div class="record-item-actions">
+          ${this.renderRecordMoreMenu(actionAttrs, { showOrder: false })}
+        </div>
+      </div>`;
+  },
+
+  renderStudyDurationBars(dayStats, opts = {}) {
+    const W = 720;
+    const H = 280;
+    const pad = { top: 28, right: 16, bottom: 36, left: 68 };
+    const plotW = W - pad.left - pad.right;
+    const plotH = H - pad.top - pad.bottom;
+    const n = Math.max(1, dayStats.length);
+    const maxHours = Math.max(4, ...dayStats.map((s) => s.hours), 0.5);
+    const barW = Math.max(5, (plotW / n) * (opts.barRatio || 0.55));
+    const xAt = (i) => pad.left + (plotW / n) * (i + 0.5);
+    const yHours = (h) => pad.top + plotH * (1 - h / maxHours);
+    const baseline = pad.top + plotH;
+
+    const hourGrid = [0, 0.25, 0.5, 0.75, 1]
+      .map((t) => {
+        const h = maxHours * t;
+        const y = yHours(h);
+        const label = h % 1 === 0 ? `${h}h` : `${h.toFixed(1)}h`;
+        return `<line class="sleep-chart-grid" x1="${pad.left}" y1="${y}" x2="${W - pad.right}" y2="${y}" />
+          <text class="sleep-chart-axis" x="${pad.left - 18}" y="${y + 4}" text-anchor="end">${label}</text>`;
+      })
+      .join('');
+
+    const bars = dayStats
+      .map((s, i) => {
+        if (!s.mins) return '';
+        const height = Math.max(3, baseline - yHours(s.hours));
+        const x = xAt(i) - barW / 2;
+        const y = baseline - height;
+        const label = this.formatSleepDurationCompact(s.mins);
+        const tip = this.escapeHtml(this.formatStudyDurationLabel(s.mins));
+        const labelY = Math.max(pad.top + 10, y - 4);
+        return `<g class="sleep-chart-bar-hit"><title>${tip}</title>
+          <rect class="sleep-chart-bar is-study" x="${x}" y="${y}" width="${barW}" height="${height}" rx="3" />
+          <text class="sleep-chart-bar-dur is-study" x="${xAt(i)}" y="${labelY}" text-anchor="middle">${this.escapeHtml(label)}</text>
+        </g>`;
+      })
+      .join('');
+
+    const xLabels = dayStats
+      .map((s, i) => {
+        const text = opts.xLabel ? opts.xLabel(s, i) : String(s.d);
+        return `<text class="sleep-chart-axis ${opts.xClass || ''}" x="${xAt(i)}" y="${H - 10}" text-anchor="middle">${text}</text>`;
+      })
+      .join('');
+
+    const titleX = 16;
+    const titleY = pad.top + plotH / 2;
+    const hasData = dayStats.some((s) => s.mins > 0);
+
+    return `
+      <div class="sleep-chart-panel study-chart-panel">
+        <div class="sleep-chart-main">
+          <div class="sleep-chart-wrap">
+            <svg class="sleep-chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="${this.escapeHtml(opts.aria || '学习时长')}">
+              ${hourGrid}
+              ${bars}
+              ${xLabels}
+              <text class="sleep-chart-axis-title" x="${titleX}" y="${titleY}" text-anchor="middle" transform="rotate(-90 ${titleX} ${titleY})">时长</text>
+            </svg>
+          </div>
+          <div class="sleep-chart-legend sleep-chart-legend-side">
+            <span class="sleep-legend-item"><i class="sleep-legend-swatch is-study"></i>学习时长</span>
+          </div>
+        </div>
+        ${hasData ? '' : `<p class="sleep-chart-empty">${this.escapeHtml(opts.empty || '暂无学习记录')}</p>`}
+      </div>`;
+  },
+
+  renderStudyWeekView(records) {
+    const anchor = this.getStudyViewAnchor();
+    const days = this.getWeekDateList(anchor);
+    const byDate = new Map(days.map((d) => [d, 0]));
+    records.forEach((r) => {
+      const date = String(r.date || '').slice(0, 10);
+      if (!byDate.has(date)) return;
+      byDate.set(date, byDate.get(date) + this.calcStudyDurationMins(r));
+    });
+    const dayStats = days.map((date, i) => {
+      const mins = byDate.get(date) || 0;
+      return {
+        d: i + 1,
+        date,
+        mins,
+        hours: mins / 60,
+      };
+    });
+    return this.renderStudyDurationBars(dayStats, {
+      barRatio: 0.42,
+      aria: '每周学习时长',
+      empty: '本周暂无学习记录',
+      xLabel: (s, i) => {
+        const md = `${s.date.slice(5, 7)}-${s.date.slice(8, 10)}`;
+        return `${md} ${WEEKDAY_LABELS[i]}`;
+      },
+    });
+  },
+
+  renderStudyMonthView(records) {
+    const anchor = this.getStudyViewAnchor();
+    const m = anchor.match(/^(\d{4})-(\d{2})/);
+    const year = m ? Number(m[1]) : new Date().getFullYear();
+    const month = m ? Number(m[2]) - 1 : new Date().getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const monthPrefix = `${year}-${String(month + 1).padStart(2, '0')}`;
+
+    const byDate = {};
+    records.forEach((r) => {
+      const date = String(r.date || '').slice(0, 10);
+      if (!date.startsWith(monthPrefix)) return;
+      byDate[date] = (byDate[date] || 0) + this.calcStudyDurationMins(r);
+    });
+
+    const dayStats = [];
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = `${monthPrefix}-${String(d).padStart(2, '0')}`;
+      const mins = byDate[date] || 0;
+      dayStats.push({ d, date, mins, hours: mins / 60 });
+    }
+
+    return this.renderStudyDurationBars(dayStats, {
+      barRatio: 0.58,
+      aria: '每月学习时长',
+      empty: '本月暂无学习记录',
+      xClass: 'sleep-chart-axis-day',
+      xLabel: (s) => String(s.d),
+    });
+  },
+
+  bindStudyViews(containerSelector) {
+    const root = containerSelector ? document.querySelector(containerSelector) : document;
+    if (!root) return;
+
+    root.querySelectorAll('[data-study-view]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const mode = btn.dataset.studyView;
+        if (!mode || mode === this.studyViewMode) return;
+        this.studyViewMode = mode;
+        if (!this.studyViewAnchor) this.studyViewAnchor = todayStr();
+        this.render();
+      });
+    });
+
+    root.querySelectorAll('.btn-study-prev').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.shiftStudyViewAnchor(-1);
+        this.render();
+      });
+    });
+
+    root.querySelectorAll('.btn-study-next').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.shiftStudyViewAnchor(1);
+        this.render();
+      });
+    });
+  },
+
   renderHabitChecklist(deptId, moduleId, mod) {
     const checklist = mod.habitChecklist || [];
     const record = Store.getTodayHabitRecord(deptId, moduleId);
@@ -2849,7 +3127,9 @@ const App = {
                       ? this.renderHabitBody(dept.id, m.id, mod)
                       : m.id === 'sleep'
                         ? this.renderSleepModuleBody(dept.id, m.id, mod, dept)
-                        : `${this.renderModuleToolbar(mod, dept)}
+                        : m.id === 'study'
+                          ? this.renderStudyModuleBody(dept.id, m.id, mod, dept)
+                          : `${this.renderModuleToolbar(mod, dept)}
                   <div class="record-list accordion-records">
                     ${
                       records.length
@@ -6507,16 +6787,20 @@ const App = {
     const washDays = themeId === 'wash' ? Store.getCalendarWashDays() : null;
 
     const renderThemeMark = (dateStr) => {
-      if (themeId === 'summary' || themeId === 'sleep') return '';
-      if (themeId === 'study') {
-        const n = studyByDate?.get(dateStr) || 0;
-        if (!n) return '';
-        return `<span class="year-cal-theme-mark is-study" title="学习记录 ${n} 条">${n > 9 ? '9+' : n}</span>`;
-      }
+      if (themeId === 'summary' || themeId === 'sleep' || themeId === 'study') return '';
       if (themeId === 'wash' && washDays?.[dateStr]) {
         return `<span class="year-cal-theme-mark is-wash" title="已洗头">💧</span>`;
       }
       return '';
+    };
+
+    const renderStudyCellBody = (dateStr) => {
+      if (themeId !== 'study') return '';
+      const info = studyByDate?.get(dateStr);
+      if (!info?.totalMins) return '';
+      const dur = this.formatSleepDurationCompact(info.totalMins);
+      if (!dur) return '';
+      return `<span class="year-cal-study-dur" title="学习 ${this.escapeHtml(dur)}">${this.escapeHtml(dur)}</span>`;
     };
 
     const renderSleepCellBody = (dateStr) => {
@@ -6574,7 +6858,9 @@ const App = {
             isToday ? 'is-today' : '',
             showCalendarEvents && dayTasks.length ? 'has-tasks' : '',
             showCalendarEvents && hasSubs ? 'has-subs' : '',
-            themeId === 'study' && studyByDate?.get(cell.dateStr) ? 'has-theme-mark' : '',
+            themeId === 'study' && studyByDate?.get(cell.dateStr)?.totalMins
+              ? 'has-theme-mark is-study-day'
+              : '',
             themeId === 'sleep' && sleepInfo?.count ? 'has-theme-mark is-sleep-day' : '',
             themeId === 'wash' && washDays?.[cell.dateStr] ? 'has-theme-mark' : '',
           ]
@@ -6585,6 +6871,7 @@ const App = {
             <button type="button" class="${classes}" data-date="${cell.dateStr}" title="${cell.dateStr}"${sleepStyle}>
               <span class="year-cal-day-num">${cell.day}</span>
               ${renderSleepCellBody(cell.dateStr)}
+              ${renderStudyCellBody(cell.dateStr)}
               ${renderThemeMark(cell.dateStr)}
               ${showCalendarEvents && hasSubs ? '<span class="year-cal-day-sub-mark" title="有子事项记录"></span>' : ''}
             </button>`;
@@ -6718,10 +7005,24 @@ const App = {
             })()
           : themeId === 'study'
             ? (() => {
-                const n = Store.getStudyActivityByDate(viewDate, viewDate).get(viewDate) || 0;
-                return n
-                  ? `<div class="year-cal-theme-day-hint">学习相关记录 ${n} 条（八股 / 手撕）</div>`
-                  : `<div class="year-cal-theme-day-hint">这一天还没有学习记录</div>`;
+                const info = studyByDate?.get(viewDate);
+                const sleepList = Store.getRawRecords('living', 'study').filter(
+                  (r) => String(r.date || '').slice(0, 10) === viewDate
+                );
+                if (!sleepList.length) {
+                  return `<div class="year-cal-theme-day-hint">这一天还没有学习记录</div>`;
+                }
+                const dur = this.formatSleepDurationFromMinutes(info?.totalMins);
+                const rows = sleepList
+                  .map((r) => {
+                    const one = this.formatStudyDurationLabel(this.calcStudyDurationMins(r));
+                    const note = r.note ? ` · ${this.escapeHtml(String(r.note))}` : '';
+                    return `<li class="year-cal-sleep-record"><span class="k">学习</span><span class="v">${this.escapeHtml(one)}${note}</span></li>`;
+                  })
+                  .join('');
+                return `
+                  <div class="year-cal-theme-day-hint">总时长 ${this.escapeHtml(dur || '—')}</div>
+                  <ul class="year-cal-sleep-record-list">${rows}</ul>`;
               })()
             : '';
 
@@ -7760,6 +8061,7 @@ const App = {
     this.bindRecordAccordions('.accordion-list');
     this.bindRecordActions('.accordion-list');
     this.bindSleepViews('.accordion-list');
+    this.bindStudyViews('.accordion-list');
     this.bindHabitChecklist();
     this.bindWeekdayCheckin();
   },

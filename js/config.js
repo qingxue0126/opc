@@ -147,7 +147,7 @@ function baguBankSelectOptions() {
 /** 年历视图模式：汇总 / 专项事项（非背景主题） */
 const CALENDAR_THEMES = [
   { id: 'summary', name: '汇总', icon: '📋', desc: '查看全部事项' },
-  { id: 'study', name: '学习', icon: '📚', desc: '查看学习相关事项' },
+  { id: 'study', name: '学习', icon: '📚', desc: '查看每日学习时长' },
   { id: 'sleep', name: '睡眠', icon: '🌙', desc: '查看睡眠相关事项' },
   { id: 'wash', name: '洗头', icon: '🧴', desc: '查看洗头记录' },
 ];
@@ -326,6 +326,19 @@ const DEPARTMENTS = [
           { key: 'hours', label: '时长', type: 'text', readonly: true },
           { key: 'quality', label: '睡眠质量得分', type: 'number', min: 0, max: 100, step: 1, readonly: true },
           { key: 'note', label: '备注', type: 'textarea' },
+        ],
+      },
+      {
+        id: 'study',
+        name: '学习',
+        icon: '📚',
+        desc: '每日学习时长',
+        editable: true,
+        recordMenu: true,
+        fields: [
+          { key: 'hours', label: '小时', type: 'number', min: 0, max: 24, step: 1, required: true },
+          { key: 'minutes', label: '分钟', type: 'number', min: 0, max: 59, step: 1 },
+          { key: 'note', label: '备注', type: 'textarea', placeholder: '学了什么…' },
         ],
       },
       {

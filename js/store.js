@@ -267,6 +267,15 @@ const Store = {
       });
     }
 
+    // 学习：固定按日期由近到远
+    if (moduleId === 'study') {
+      return list.sort((a, b) => {
+        const da = String(b.date || '').localeCompare(String(a.date || ''));
+        if (da) return da;
+        return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+      });
+    }
+
     const { mode, customOrder } = this.getModuleSort(deptId, moduleId);
 
     if (mode === 'time') {
@@ -2254,16 +2263,23 @@ const Store = {
     return next;
   },
 
-  /** 学习主题：八股 + 手撕 按日计数 */
+  /** 学习视图：按日汇总生活·学习模块总时长（分钟） */
   getStudyActivityByDate(startDate, endDate) {
     const map = new Map();
-    const bump = (date) => {
-      const d = String(date || '').slice(0, 10);
+    this.getRawRecords('living', 'study').forEach((r) => {
+      const d = String(r.date || '').slice(0, 10);
       if (!d || (startDate && d < startDate) || (endDate && d > endDate)) return;
-      map.set(d, (map.get(d) || 0) + 1);
-    };
-    this.getRawRecords('core', 'bagu').forEach((r) => bump(r.date || r.createdAt));
-    this.getRawRecords('core', 'handwrite').forEach((r) => bump(r.date || r.createdAt));
+      const h = Number(r.hours);
+      const min = Number(r.minutes);
+      const hours = Number.isFinite(h) ? Math.max(0, h) : 0;
+      const mins = Number.isFinite(min) ? Math.max(0, Math.min(59, Math.round(min))) : 0;
+      const add = Math.round(hours * 60 + mins);
+      const prev = map.get(d) || { count: 0, totalMins: 0 };
+      map.set(d, {
+        count: prev.count + 1,
+        totalMins: prev.totalMins + add,
+      });
+    });
     return map;
   },
 

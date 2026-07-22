@@ -5304,8 +5304,27 @@ body {
 }
 
 .year-cal-theme-mark.is-study {
-  background: #EEF2FF;
-  color: #4338CA;
+  background: #CCFBF1;
+  color: #0F766E;
+}
+
+.year-cal-study-dur {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 3px;
+  padding: 0 2px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 800;
+  color: #0F766E;
+  line-height: 1.15;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.year-cal-day.is-study-day {
+  overflow: visible;
 }
 
 .year-cal-theme-mark.is-wash {
@@ -6878,6 +6897,93 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.study-module-body {
+  height: auto;
+  max-height: 320px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.study-module-body:has(.sleep-chart-panel) {
+  max-height: none;
+  overflow: visible;
+}
+
+.study-module-body .study-day-list {
+  margin: 0;
+}
+
+.study-module-body .empty-state {
+  margin: 0;
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sleep-legend-swatch.is-study {
+  background: #14B8A6;
+}
+
+.sleep-chart-bar.is-study {
+  fill: #14B8A6;
+}
+
+.sleep-chart-bar-hit:hover .sleep-chart-bar.is-study {
+  fill: #0D9488;
+}
+
+.sleep-chart-bar-dur.is-study {
+  fill: #0F766E;
+}
+
+.record-item-study {
+  display: grid;
+  grid-template-columns:
+    minmax(124px, 1fr)
+    minmax(140px, 1fr)
+    minmax(160px, 2fr)
+    36px;
+  align-items: center;
+  column-gap: 12px;
+}
+
+.record-item-study .study-col {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.record-item-study .study-col-date {
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.record-item-study .study-col-dur .k {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.record-item-study .study-col-dur .v {
+  font-weight: 700;
+  color: #0F766E;
+}
+
+.record-item-study .study-col-note {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.record-item-study .study-col-note .muted {
+  color: var(--text-muted);
 }
 
 /* 日视图记录行（对齐网格，收窄前列宽） */

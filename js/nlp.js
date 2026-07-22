@@ -13,6 +13,7 @@ const DEPT_KEYWORDS = [
   { deptId: 'core', moduleId: 'apply', words: ['投递', 'offer', '内推'] },
   { deptId: 'core', moduleId: 'interview', words: ['面试', '一面', '二面', 'HR面'] },
   { deptId: 'living', moduleId: 'sleep', words: ['睡觉', '睡眠', '入睡', '起床', '熬夜'] },
+  { deptId: 'living', moduleId: 'study', words: ['学习', '自习', '看书', '刷题', '听课', '网课'] },
   { deptId: 'living', moduleId: 'exercise', words: ['运动', '跑步', '健身', '瑜伽', '走路'] },
   { deptId: 'living', moduleId: 'weight', words: ['体重', '减肥', '瘦', '斤'] },
   { deptId: 'living', moduleId: 'health', words: ['早晨启动', '晨间', '梳头', '刷牙', '洗脸', '护肤', '温水', '健康'] },
