@@ -4096,18 +4096,40 @@ const App = {
               ? habitMeta.meta
               : `${records.length} 条${today ? ' · 今日已记' : ''}`;
             const expanded = expandedSet.has(m.id);
-            return `
-              <div class="accordion-item ${expanded ? 'expanded' : ''}" data-dept="${dept.id}" data-module="${m.id}">
-                <div class="accordion-header-row">
-                  <button type="button" class="accordion-header" style="--accent:${dept.color}">
-                    <span class="accordion-icon">${mod.icon}</span>
+            const editBtn =
+              dept.id === 'living'
+                ? `<button type="button" class="btn-edit-module btn-edit-module-living" title="编辑模块"
+                    data-dept="${dept.id}" data-module="${m.id}">编辑</button>`
+                : `<button type="button" class="icon-btn btn-edit-module" title="编辑模块"
+                    data-dept="${dept.id}" data-module="${m.id}">✎</button>`;
+            const collapseBtn =
+              dept.id === 'living'
+                ? `<button type="button" class="chat-collapse-btn accordion-collapse-btn" title="${expanded ? '收起' : '展开'}" aria-expanded="${expanded ? 'true' : 'false'}" data-dept="${dept.id}" data-module="${m.id}">
+                    <span class="chat-collapse-label">${expanded ? '收起' : '展开'}</span>
+                    <span class="chat-collapse-chevron" aria-hidden="true">${expanded ? '‹' : '›'}</span>
+                  </button>`
+                : '';
+            const headerInner =
+              dept.id === 'living'
+                ? `<span class="accordion-icon">${mod.icon}</span>
+                    <span class="accordion-living-text">
+                      <span class="accordion-title">${this.escapeHtml(mod.name)}</span>
+                      <span class="accordion-desc">${this.escapeHtml(mod.desc)}</span>
+                    </span>
+                    <span class="accordion-meta">${meta}</span>`
+                : `<span class="accordion-icon">${mod.icon}</span>
                     <span class="accordion-title">${this.escapeHtml(mod.name)}</span>
                     <span class="accordion-desc">${this.escapeHtml(mod.desc)}</span>
                     <span class="accordion-meta">${meta}</span>
-                    <span class="accordion-chevron">›</span>
+                    <span class="accordion-chevron">›</span>`;
+            return `
+              <div class="accordion-item ${expanded ? 'expanded' : ''}" data-dept="${dept.id}" data-module="${m.id}">
+                <div class="accordion-header-row${dept.id === 'living' ? ' accordion-header-row-living' : ''}">
+                  <button type="button" class="accordion-header${dept.id === 'living' ? ' accordion-header-living' : ''}" style="--accent:${dept.color}">
+                    ${headerInner}
                   </button>
-                  <button type="button" class="icon-btn btn-edit-module" title="编辑模块"
-                    data-dept="${dept.id}" data-module="${m.id}">✎</button>
+                  ${collapseBtn}
+                  ${editBtn}
                 </div>
                 <div class="accordion-body">
                   ${
@@ -9011,17 +9033,39 @@ const App = {
   bindDeptAccordion(deptId) {
     const expandedSet = this.getDeptExpanded(deptId);
 
+    const toggleItem = (item) => {
+      if (!item) return;
+      const moduleId = item.dataset.module;
+      if (expandedSet.has(moduleId)) {
+        expandedSet.delete(moduleId);
+        item.classList.remove('expanded');
+      } else {
+        expandedSet.add(moduleId);
+        item.classList.add('expanded');
+      }
+      // 同步生活模块展开按钮文案
+      const collapseBtn = item.querySelector('.accordion-collapse-btn');
+      if (collapseBtn) {
+        const open = item.classList.contains('expanded');
+        collapseBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        collapseBtn.title = open ? '收起' : '展开';
+        const label = collapseBtn.querySelector('.chat-collapse-label');
+        const chevron = collapseBtn.querySelector('.chat-collapse-chevron');
+        if (label) label.textContent = open ? '收起' : '展开';
+        if (chevron) chevron.textContent = open ? '‹' : '›';
+      }
+    };
+
     document.querySelectorAll('.accordion-header').forEach((btn) => {
       btn.addEventListener('click', () => {
-        const item = btn.closest('.accordion-item');
-        const moduleId = item.dataset.module;
-        if (expandedSet.has(moduleId)) {
-          expandedSet.delete(moduleId);
-          item.classList.remove('expanded');
-        } else {
-          expandedSet.add(moduleId);
-          item.classList.add('expanded');
-        }
+        toggleItem(btn.closest('.accordion-item'));
+      });
+    });
+
+    document.querySelectorAll('.accordion-collapse-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleItem(btn.closest('.accordion-item'));
       });
     });
 
