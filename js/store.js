@@ -1123,6 +1123,176 @@ const Store = {
     return `${fmt(monday)} - ${fmt(sunday)}`;
   },
 
+  monthKey(date = new Date()) {
+    const d = date instanceof Date ? date : new Date(date);
+    if (Number.isNaN(d.getTime())) {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    }
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  },
+
+  monthLabel(monthKey) {
+    const m = String(monthKey || '').match(/^(\d{4})-(\d{2})$/);
+    if (!m) return monthKey || '';
+    return `${m[1]}年${Number(m[2])}月`;
+  },
+
+  currentPlanKey(type) {
+    if (type === 'weekly') return this.weekKey();
+    if (type === 'monthly') return this.monthKey();
+    return typeof todayStr === 'function' ? todayStr() : this.monthKey().slice(0, 7) + '-01';
+  },
+
+  shiftPlanKey(type, key, delta) {
+    if (type === 'weekly') {
+      const m = String(key || '').match(/^(\d{4})-W(\d{2})$/);
+      if (!m) return this.weekKey();
+      const year = Number(m[1]);
+      const week = Number(m[2]);
+      const simple = new Date(year, 0, 1 + (week - 1) * 7);
+      const dow = simple.getDay();
+      const monday = new Date(simple);
+      if (dow <= 4) monday.setDate(simple.getDate() - simple.getDay() + 1);
+      else monday.setDate(simple.getDate() + 8 - simple.getDay());
+      monday.setDate(monday.getDate() + delta * 7);
+      return this.weekKey(monday);
+    }
+    if (type === 'monthly') {
+      const m = String(key || '').match(/^(\d{4})-(\d{2})$/);
+      const d = m ? new Date(Number(m[1]), Number(m[2]) - 1 + delta, 1) : new Date();
+      return this.monthKey(d);
+    }
+    const d = new Date(`${key || todayStr()}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return todayStr();
+    d.setDate(d.getDate() + delta);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  },
+
+  planKeyLabel(type, key) {
+    if (type === 'weekly') return this.weekRangeLabel(key);
+    if (type === 'monthly') return this.monthLabel(key);
+    if (typeof formatDate === 'function') return formatDate(key);
+    return key;
+  },
+
+  planChipLabel(type, key) {
+    const current = this.currentPlanKey(type);
+    if (key === current) {
+      if (type === 'weekly') return '本周';
+      if (type === 'monthly') return '本月';
+      return '今天';
+    }
+    return this.planKeyLabel(type, key);
+  },
+
+  /** 按未来 / 今天(本周/本月) / 过去 聚合某类计划 */
+  getPlanTimeline(type) {
+    const t = type === 'weekly' || type === 'monthly' ? type : 'daily';
+    const plans = this.getSettings().plans || {};
+    const bucket = plans[t] || {};
+    const current = this.currentPlanKey(t);
+    const keys = new Set(Object.keys(bucket).filter((k) => Array.isArray(bucket[k]) && bucket[k].length));
+    keys.add(current);
+    const sorted = [...keys].sort((a, b) => a.localeCompare(b));
+    const future = [];
+    const past = [];
+    let today = { key: current, label: this.planKeyLabel(t, current), items: this.getPlanItems(t, current) };
+    sorted.forEach((key) => {
+      const items = this.getPlanItems(t, key);
+      const entry = { key, label: this.planKeyLabel(t, key), items };
+      if (key === current) today = entry;
+      else if (key > current) future.push(entry);
+      else past.push(entry);
+    });
+    future.sort((a, b) => a.key.localeCompare(b.key));
+    past.sort((a, b) => b.key.localeCompare(a.key));
+    return { type: t, current, future, today, past };
+  },
+
+  /** 周统计打卡表：行=事项文案，列=周一…周日 */
+  getPlanWeekTracker(weekKey) {
+    const key = weekKey || this.weekKey();
+    const m = String(key).match(/^(\d{4})-W(\d{2})$/);
+    let monday;
+    if (m) {
+      const year = Number(m[1]);
+      const week = Number(m[2]);
+      const simple = new Date(year, 0, 1 + (week - 1) * 7);
+      const dow = simple.getDay();
+      monday = new Date(simple);
+      if (dow <= 4) monday.setDate(simple.getDate() - simple.getDay() + 1);
+      else monday.setDate(simple.getDate() + 8 - simple.getDay());
+    } else {
+      monday = new Date();
+      const offset = (monday.getDay() + 6) % 7;
+      monday.setDate(monday.getDate() - offset);
+      monday.setHours(0, 0, 0, 0);
+    }
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      days.push(
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      );
+    }
+    const rowMap = new Map();
+    days.forEach((date) => {
+      this.getPlanItems('daily', date).forEach((item) => {
+        const label = String(item.text || '').trim() || '未命名';
+        if (!rowMap.has(label)) {
+          rowMap.set(label, { label, cells: {} });
+        }
+        const row = rowMap.get(label);
+        const prev = row.cells[date];
+        if (!prev) row.cells[date] = { done: Boolean(item.done), count: 1 };
+        else {
+          row.cells[date] = {
+            done: prev.done || Boolean(item.done),
+            count: prev.count + 1,
+          };
+        }
+      });
+    });
+    return {
+      weekKey: key,
+      rangeLabel: this.weekRangeLabel(key),
+      days,
+      rows: [...rowMap.values()],
+    };
+  },
+
+  /** 月统计：每日完成率 */
+  getPlanMonthStats(monthKey) {
+    const key = monthKey || this.monthKey();
+    const m = String(key).match(/^(\d{4})-(\d{2})$/);
+    const year = m ? Number(m[1]) : new Date().getFullYear();
+    const month = m ? Number(m[2]) - 1 : new Date().getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const days = [];
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const items = this.getPlanItems('daily', date);
+      const total = items.length;
+      const done = items.filter((i) => i.done).length;
+      days.push({
+        d,
+        date,
+        total,
+        done,
+        rate: total ? done / total : 0,
+      });
+    }
+    return {
+      monthKey: key,
+      label: this.monthLabel(key),
+      year,
+      month,
+      days,
+    };
+  },
+
   getPlanItems(type, key) {
     const plans = this.getSettings().plans || {};
     const bucket = plans[type] || {};
@@ -1505,15 +1675,42 @@ const Store = {
     this.save(data);
   },
 
-  addPlanItem(type, key, text) {
+  addPlanItem(type, key, text, extra = {}) {
     const items = this.getPlanItems(type, key);
-    items.push({
+    const note = String(extra?.note || '').trim();
+    const priority =
+      extra?.priority === 'high' || extra?.priority === 'medium' || extra?.priority === 'low'
+        ? extra.priority
+        : 'none';
+    const tags = Array.isArray(extra?.tags)
+      ? extra.tags.map((t) => String(t || '').trim()).filter(Boolean)
+      : [];
+    const children = (Array.isArray(extra?.children) ? extra.children : [])
+      .map((child) => {
+        if (typeof child === 'string') {
+          const t = child.trim();
+          if (!t) return null;
+          return {
+            id: crypto.randomUUID(),
+            text: t,
+            done: false,
+            createdAt: new Date().toISOString(),
+          };
+        }
+        return null;
+      })
+      .filter(Boolean);
+    const item = {
       id: crypto.randomUUID(),
       text: String(text || '').trim(),
       done: false,
       createdAt: new Date().toISOString(),
-      children: [],
-    });
+      priority,
+      tags,
+      children,
+    };
+    if (note) item.note = note;
+    items.push(item);
     this.setPlanItems(type, key, items);
     return items;
   },
@@ -1530,19 +1727,30 @@ const Store = {
     return null;
   },
 
-  addPlanSubItem(type, key, parentId, text) {
+  addPlanSubItem(type, key, parentId, text, extra = {}) {
     const trimmed = String(text || '').trim();
     if (!trimmed || !parentId) return null;
     const items = this.getPlanItems(type, key);
     const parent = items.find((item) => item.id === parentId);
     if (!parent) return null;
     if (!Array.isArray(parent.children)) parent.children = [];
+    const priority =
+      extra?.priority === 'high' || extra?.priority === 'medium' || extra?.priority === 'low'
+        ? extra.priority
+        : 'none';
+    const tags = Array.isArray(extra?.tags)
+      ? extra.tags.map((t) => String(t || '').trim()).filter(Boolean)
+      : [];
+    const note = String(extra?.note || '').trim();
     const child = {
       id: crypto.randomUUID(),
       text: trimmed,
       done: false,
       createdAt: new Date().toISOString(),
+      priority,
+      tags,
     };
+    if (note) child.note = note;
     parent.children.push(child);
     this.setPlanItems(type, key, items);
     return child;
@@ -1584,7 +1792,13 @@ const Store = {
       text: String(item.text || ''),
       done: Boolean(item.done),
       createdAt: item.createdAt || new Date().toISOString(),
+      priority:
+        item.priority === 'high' || item.priority === 'medium' || item.priority === 'low'
+          ? item.priority
+          : 'none',
     };
+    if (item.note) child.note = item.note;
+    if (Array.isArray(item.tags) && item.tags.length) child.tags = [...item.tags];
     const kind = item.refKind || (item.interviewId ? 'interview' : null);
     const refId = item.refId || item.interviewId;
     if (kind && refId) {
@@ -1822,6 +2036,79 @@ const Store = {
     found.item.done = !found.item.done;
     this.setPlanItems(type, key, items);
     return items;
+  },
+
+  updatePlanItem(type, key, itemId, patch = {}) {
+    const items = this.getPlanItems(type, key);
+    const found = this.findPlanItem(items, itemId);
+    if (!found) return null;
+    const item = found.item;
+    if (patch.text != null) item.text = String(patch.text || '').trim();
+    if (patch.note != null) {
+      const note = String(patch.note || '').trim();
+      if (note) item.note = note;
+      else delete item.note;
+    }
+    if (patch.priority != null) {
+      item.priority =
+        patch.priority === 'high' || patch.priority === 'medium' || patch.priority === 'low'
+          ? patch.priority
+          : 'none';
+    }
+    if (Array.isArray(patch.tags)) {
+      item.tags = patch.tags.map((t) => String(t || '').trim()).filter(Boolean);
+    }
+    if (Array.isArray(patch.children) && !found.parent) {
+      const prev = Array.isArray(item.children) ? item.children : [];
+      const refs = prev.filter((c) => c.refKind && c.refId);
+      const nextText = patch.children.map((t) => String(t || '').trim()).filter(Boolean);
+      const next = nextText.map((text, i) => {
+        const old = prev.find((c) => !c.refKind && String(c.text || '') === text) || prev.filter((c) => !c.refKind)[i];
+        if (old && !old.refKind) {
+          return { ...old, text };
+        }
+        return {
+          id: crypto.randomUUID(),
+          text,
+          done: false,
+          createdAt: new Date().toISOString(),
+        };
+      });
+      item.children = [...next, ...refs];
+    }
+    this.setPlanItems(type, key, items);
+    return item;
+  },
+
+  /** 将顶级待办移到同一 type 下的另一个 key */
+  movePlanItemToKey(type, fromKey, toKey, itemId) {
+    if (!itemId || fromKey === toKey) return false;
+    const fromItems = this.getPlanItems(type, fromKey);
+    const found = this.findPlanItem(fromItems, itemId);
+    if (!found || found.parent) return false;
+    const removed = this.removePlanItemFromTree(fromItems, itemId);
+    if (!removed) return false;
+    this.setPlanItems(type, fromKey, fromItems);
+    const toItems = this.getPlanItems(type, toKey);
+    toItems.push(removed);
+    this.setPlanItems(type, toKey, toItems);
+    return true;
+  },
+
+  /** 将同级待办排到目标下标 */
+  reorderPlanItem(type, key, itemId, toIndex) {
+    const items = this.getPlanItems(type, key);
+    const found = this.findPlanItem(items, itemId);
+    if (!found) return false;
+    const list = found.parent ? found.parent.children || [] : items;
+    const from = list.findIndex((item) => item.id === itemId);
+    if (from < 0) return false;
+    const target = Math.max(0, Math.min(Number(toIndex), list.length - 1));
+    if (from === target) return true;
+    const [moved] = list.splice(from, 1);
+    list.splice(target, 0, moved);
+    this.setPlanItems(type, key, items);
+    return true;
   },
 
   deletePlanItem(type, key, itemId) {
