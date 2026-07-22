@@ -23,6 +23,7 @@ const App = {
   calendarYear: null,
   calendarMonth: null,
   calendarViewDate: null,
+  calendarFocusTaskId: null,
   navExpanded: null, // Set<deptId> 侧栏展开的部门
   _scrollToAccordionModule: null,
 
@@ -3826,13 +3827,26 @@ const App = {
   },
 
   formatStudyDurationLabel(mins) {
-    if (mins == null || !Number.isFinite(mins) || mins <= 0) return '—';
+    if (mins == null || !Number.isFinite(mins) || mins < 0) return '—';
     const total = Math.round(mins);
     const h = Math.floor(total / 60);
     const m = total % 60;
+    if (total === 0) return '0 h';
     if (!h) return `${m} min`;
     if (!m) return `${h} h`;
     return `${h} h ${m} min`;
+  },
+
+  /** 日历学习格子：紧凑时长；有记录且为 0 时显示 0h */
+  formatStudyCalendarDuration(mins) {
+    if (mins == null || !Number.isFinite(mins) || mins < 0) return '';
+    const total = Math.round(mins);
+    const h = Math.floor(total / 60);
+    const m = total % 60;
+    if (total === 0) return '0h';
+    if (!h) return `${m}m`;
+    if (!m) return `${h}h`;
+    return `${h}h${String(m).padStart(2, '0')}`;
   },
 
   getStudyViewAnchor() {
@@ -7843,6 +7857,10 @@ const App = {
     return `${month + 1}月`;
   },
 
+  formatCalendarPeriodLabel(year, month) {
+    return `${year}年 ${month + 1}月`;
+  },
+
   formatCalendarRangeLabel(start, end) {
     if (!start) return '';
     if (!end || start === end) return start;
@@ -7898,8 +7916,8 @@ const App = {
     const renderStudyCellBody = (dateStr) => {
       if (themeId !== 'study') return '';
       const info = studyByDate?.get(dateStr);
-      if (!info?.totalMins) return '';
-      const dur = this.formatSleepDurationCompact(info.totalMins);
+      if (!info?.count) return '';
+      const dur = this.formatStudyCalendarDuration(info.totalMins);
       if (!dur) return '';
       return `<span class="year-cal-study-dur" title="学习 ${this.escapeHtml(dur)}">${this.escapeHtml(dur)}</span>`;
     };
@@ -7959,7 +7977,7 @@ const App = {
             isToday ? 'is-today' : '',
             showCalendarEvents && dayTasks.length ? 'has-tasks' : '',
             showCalendarEvents && hasSubs ? 'has-subs' : '',
-            themeId === 'study' && studyByDate?.get(cell.dateStr)?.totalMins
+            themeId === 'study' && studyByDate?.get(cell.dateStr)?.count
               ? 'has-theme-mark is-study-day'
               : '',
             themeId === 'sleep' && sleepInfo?.count ? 'has-theme-mark is-sleep-day' : '',
@@ -8052,7 +8070,7 @@ const App = {
             const kindLabel = this.calendarItemKindLabel(task.kind);
             const subCount = (task.subs || []).length;
             return `
-              <li class="year-cal-month-task ${task.done ? 'is-done' : ''} kind-${task.kind || 'task'}" data-task-id="${task.id}" data-jump-date="${task.startDate}" style="${this.calendarItemStyle(task)}">
+              <li class="year-cal-month-task ${task.done ? 'is-done' : ''} ${this.calendarFocusTaskId === task.id ? 'is-selected' : ''} kind-${task.kind || 'task'}" data-task-id="${task.id}" data-jump-date="${task.startDate}" style="${this.calendarItemStyle(task)}">
                 <span class="year-cal-month-task-range">${this.escapeHtml(range)} · ${kindLabel}${subCount ? ` · ${subCount} 记` : ''}</span>
                 <span class="year-cal-month-task-text">${this.escapeHtml(task.text)}</span>
               </li>`;
@@ -8113,7 +8131,9 @@ const App = {
                 if (!sleepList.length) {
                   return `<div class="year-cal-theme-day-hint">这一天还没有学习记录</div>`;
                 }
-                const dur = this.formatSleepDurationFromMinutes(info?.totalMins);
+                const dur = this.formatStudyDurationLabel(
+                  info?.totalMins != null ? info.totalMins : 0
+                );
                 const rows = sleepList
                   .map((r) => {
                     const one = this.formatStudyDurationLabel(this.calcStudyDurationMins(r));
@@ -8122,13 +8142,13 @@ const App = {
                   })
                   .join('');
                 return `
-                  <div class="year-cal-theme-day-hint">总时长 ${this.escapeHtml(dur || '—')}</div>
+                  <div class="year-cal-theme-day-hint">总时长 ${this.escapeHtml(dur)}</div>
                   <ul class="year-cal-sleep-record-list">${rows}</ul>`;
               })()
             : '';
 
     const monthPanelHead =
-      themeId === 'summary' ? '月度事项' : `月度 · ${themeMeta.name}`;
+      themeId === 'summary' ? '月度 · 事项' : `月度 · ${themeMeta.name}`;
     const dayPanelTasks =
       themeId === 'summary'
         ? `<ul class="year-cal-task-list">${taskList}</ul>`
@@ -8139,10 +8159,20 @@ const App = {
     return `
       <section class="year-calendar mode-${this.escapeHtml(themeId)}" data-year="${year}" data-month="${month}" data-theme="${this.escapeHtml(themeId)}">
         <div class="year-cal-head">
-          <div class="year-cal-year-switch">
-            <button type="button" class="btn btn-ghost btn-sm btn-year-cal-year-prev" title="上一年">‹</button>
-            <span class="year-cal-title">${this.formatCalendarYearLabel(year)}</span>
-            <button type="button" class="btn btn-ghost btn-sm btn-year-cal-year-next" title="下一年">›</button>
+          <div class="year-cal-head-left">
+            <div class="year-cal-period-switch">
+              <button type="button" class="year-cal-period-arrow btn-year-cal-prev" title="上个月">‹</button>
+              <span class="year-cal-period-label">${this.escapeHtml(this.formatCalendarPeriodLabel(year, month))}</span>
+              <button type="button" class="year-cal-period-arrow btn-year-cal-next" title="下个月">›</button>
+            </div>
+            <button type="button" class="btn-year-cal-today" title="回到今天">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3.5" y="5" width="17" height="15" rx="2.5"></rect>
+                <path d="M8 3.5v3M16 3.5v3M3.5 9.5h17"></path>
+                <path d="M9.2 14.2l2 2 3.8-4"></path>
+              </svg>
+              <span>回到今天</span>
+            </button>
           </div>
           <div class="year-cal-head-actions">
             <div class="year-cal-theme-wrap">
@@ -8165,11 +8195,6 @@ const App = {
         </div>
         <div class="year-cal-body">
           <aside class="year-cal-side">
-            <div class="year-cal-nav">
-              <button type="button" class="btn btn-ghost btn-sm btn-year-cal-prev" title="上个月">‹</button>
-              <span class="year-cal-month-label">${this.formatCalendarMonthLabel(month)}</span>
-              <button type="button" class="btn btn-ghost btn-sm btn-year-cal-next" title="下个月">›</button>
-            </div>
             <div class="year-cal-month-panel">
               <div class="year-cal-month-panel-head">${this.escapeHtml(monthPanelHead)}</div>
               <ul class="year-cal-month-task-list">${
@@ -8212,25 +8237,12 @@ const App = {
       }
       this.calendarYear = y;
       this.calendarMonth = m;
-      this.render();
-    };
-
-    const setYear = (year) => {
-      this.calendarYear = Math.max(1970, Math.min(2100, year));
       const day = String(this.calendarViewDate || '').slice(8, 10) || '01';
-      const month = this.calendarMonth ?? 0;
-      const last = new Date(this.calendarYear, month + 1, 0).getDate();
+      const last = new Date(y, m + 1, 0).getDate();
       const d = Math.min(Number(day) || 1, last);
-      this.calendarViewDate = `${this.calendarYear}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      this.calendarViewDate = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
       this.render();
     };
-
-    root.querySelector('.btn-year-cal-year-prev')?.addEventListener('click', () => {
-      setYear((this.calendarYear ?? new Date().getFullYear()) - 1);
-    });
-    root.querySelector('.btn-year-cal-year-next')?.addEventListener('click', () => {
-      setYear((this.calendarYear ?? new Date().getFullYear()) + 1);
-    });
 
     root.querySelector('.btn-year-cal-theme')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -8268,6 +8280,11 @@ const App = {
     });
     root.querySelector('.btn-year-cal-next')?.addEventListener('click', () => {
       setMonth((this.calendarMonth ?? 0) + 1);
+    });
+
+    root.querySelector('.btn-year-cal-today')?.addEventListener('click', () => {
+      this.setCalendarToDate(todayStr());
+      this.render();
     });
 
     root.querySelector('.btn-year-cal-create')?.addEventListener('click', (e) => {
@@ -8309,6 +8326,7 @@ const App = {
       btn.addEventListener('click', () => {
         const date = btn.dataset.date;
         if (!date) return;
+        this.calendarFocusTaskId = null;
         this.setCalendarToDate(date);
         this.render();
       });
@@ -8317,7 +8335,9 @@ const App = {
     root.querySelectorAll('.year-cal-month-task[data-jump-date]').forEach((el) => {
       el.addEventListener('click', () => {
         const date = el.dataset.jumpDate;
+        const taskId = el.dataset.taskId || null;
         if (!date) return;
+        this.calendarFocusTaskId = taskId;
         this.setCalendarToDate(date);
         this.render();
       });
