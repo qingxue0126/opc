@@ -4,6 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { lookupLeetCodeQuestion } = require('./lib/leetcodelookup');
 const { classifyBaguQuestion, smartSortBaguQuestions } = require('./lib/baguclassify');
+const { runBaguCat } = require('./lib/bagucat');
 
 const PORT = 8080;
 const ROOT = __dirname;
@@ -193,6 +194,96 @@ async function callUpstreamLLM(settings, messages, temperature = 0.7) {
 
   const data = JSON.parse(text);
   return data.choices?.[0]?.message?.content?.trim() || '';
+}
+
+/**
+ * OpenAI 兼容流式补全；onDelta(chunkText) 每次追加一段；返回完整 content
+ */
+async function callUpstreamLLMStream(settings, messages, temperature = 0.7, onDelta) {
+  if (!settings.apiKey) throw new Error('未配置 API Key');
+
+  const res = await fetch(`${settings.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${settings.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: settings.model,
+      temperature,
+      stream: true,
+      messages,
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    let detail = text.slice(0, 200);
+    try {
+      detail = JSON.parse(text).error?.message || detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(`API ${res.status}: ${detail}`);
+  }
+
+  if (!res.body) throw new Error('上游未返回流式响应');
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+  let full = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) continue;
+      const data = trimmed.slice(5).trim();
+      if (!data || data === '[DONE]') continue;
+      try {
+        const json = JSON.parse(data);
+        const piece =
+          json.choices?.[0]?.delta?.content ||
+          json.choices?.[0]?.message?.content ||
+          '';
+        if (piece) {
+          full += piece;
+          if (typeof onDelta === 'function') onDelta(piece);
+        }
+      } catch {
+        /* ignore partial json */
+      }
+    }
+  }
+
+  return full.trim();
+}
+
+function beginNdjson(res) {
+  res.writeHead(200, {
+    'Content-Type': 'application/x-ndjson; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  return (obj) => {
+    res.write(`${JSON.stringify(obj)}\n`);
+  };
+}
+
+async function fakeStreamText(text, onDelta, stepMs = 10) {
+  const s = String(text || '');
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (typeof onDelta === 'function') onDelta(ch);
+    if (stepMs > 0) await new Promise((r) => setTimeout(r, stepMs));
+  }
+  return s;
 }
 
 async function testUpstreamLLM(settings) {
@@ -392,6 +483,23 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 400, { error: 'messages 无效' });
       }
 
+      const wantStream = body.stream === true || body.stream === 1 || body.stream === '1';
+      if (wantStream) {
+        const write = beginNdjson(res);
+        try {
+          const content = await callUpstreamLLMStream(
+            settings,
+            messages,
+            body.temperature ?? 0.7,
+            (delta) => write({ type: 'delta', text: delta })
+          );
+          write({ type: 'done', content, model: settings.model });
+        } catch (err) {
+          write({ type: 'error', error: err.message || 'LLM 调用失败' });
+        }
+        return res.end();
+      }
+
       try {
         const content = await callUpstreamLLM(settings, messages, body.temperature ?? 0.7);
         return sendJson(res, 200, { content, model: settings.model });
@@ -477,6 +585,74 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { items });
       } catch (err) {
         return sendJson(res, 502, { error: err.message || '智能排序失败' });
+      }
+    }
+
+    if (urlPath === '/api/bagu/cat' && req.method === 'POST') {
+      const session = getSession(req);
+      if (!session) return sendJson(res, 401, { error: '未登录' });
+
+      const body = JSON.parse(await readBody(req));
+      const message = String(body.message || '').trim();
+      if (!message) return sendJson(res, 400, { error: '请输入内容' });
+
+      const settings = getUserLLMSettings(session.userId);
+      const wantStream = body.stream !== false;
+      const llmCall =
+        settings.apiKey && settings.preferLLM
+          ? (messages) => callUpstreamLLM(settings, messages, 0.55)
+          : null;
+      const llmStream =
+        settings.apiKey && settings.preferLLM
+          ? (messages, onDelta) => callUpstreamLLMStream(settings, messages, 0.55, onDelta)
+          : null;
+
+      if (wantStream) {
+        const write = beginNdjson(res);
+        try {
+          const result = await runBaguCat(
+            {
+              message,
+              bank: body.bank || {},
+              questions: body.questions || [],
+              history: body.history || [],
+              banks: body.banks || [],
+              pending: body.pending || null,
+            },
+            {
+              llmCall,
+              llmStream,
+              onReplyDelta: (delta, full) => write({ type: 'delta', text: delta, reply: full }),
+              fakeStream: fakeStreamText,
+            }
+          );
+          write({
+            type: 'done',
+            reply: result.reply,
+            actions: result.actions || [],
+            pending: result.pending || null,
+          });
+        } catch (err) {
+          write({ type: 'error', error: err.message || '八股猫开小差了' });
+        }
+        return res.end();
+      }
+
+      try {
+        const result = await runBaguCat(
+          {
+            message,
+            bank: body.bank || {},
+            questions: body.questions || [],
+            history: body.history || [],
+            banks: body.banks || [],
+            pending: body.pending || null,
+          },
+          { llmCall }
+        );
+        return sendJson(res, 200, result);
+      } catch (err) {
+        return sendJson(res, 502, { error: err.message || '八股猫开小差了' });
       }
     }
 

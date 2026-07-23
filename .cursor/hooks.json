@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File D:\\Desktop\\OPC\\.cursor\\hooks\\notify_feishu.ps1",
+        "timeout": 30
+      }
+    ]
+  }
+}

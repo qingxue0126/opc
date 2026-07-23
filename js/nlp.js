@@ -44,6 +44,8 @@ const CHAT_INTENT_RE =
   /^(你好|嗨|哈喽|hello|hi|在吗|在不在|你是谁|你叫什么|怎么样|还好吗|谢谢|多谢|晚安|早安|午安|哈哈|嘿嘿|无聊|开心|难过|累|emo|天气|喜欢|讨厌|可爱|傻|笨)/i;
 
 const NLP = {
+  /** 自然语言创建/修改打卡卡片：暂时关闭，仅保留闲聊 */
+  cardActionsEnabled: false,
   getSettings() {
     const data = Store.load();
     return { ...LLM_DEFAULTS, ...(data.settings?.llm || {}) };
@@ -71,6 +73,9 @@ const NLP = {
 
   buildCapabilitiesReply(assistant) {
     const name = assistant?.name || '时间喵';
+    if (!this.cardActionsEnabled) {
+      return `喵～${name}现在主要陪你闲聊：打招呼、聊心情、安慰鼓励你都可以直接跟我说～`;
+    }
     return `喵～${name}可以帮你做这些事：
 
 1. **闲聊陪伴**：打招呼、聊心情、安慰鼓励你
@@ -103,8 +108,70 @@ const NLP = {
       body: JSON.stringify({
         messages,
         temperature: options.temperature ?? 0.7,
+        stream: Boolean(options.stream && options.onDelta),
       }),
     });
+
+    if (options.stream && options.onDelta) {
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `LLM 请求失败 (${res.status})`);
+      }
+      let content = '';
+      let streamError = null;
+      const reader = res.body?.getReader();
+      if (!reader) {
+        const text = await res.text();
+        for (const line of text.split(/\r?\n/).filter(Boolean)) {
+          try {
+            const ev = JSON.parse(line);
+            if (ev.type === 'delta') {
+              content += ev.text || '';
+              options.onDelta(ev.text || '', content);
+            } else if (ev.type === 'done') {
+              content = ev.content || content;
+            } else if (ev.type === 'error') {
+              streamError = ev.error;
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+        if (streamError) throw new Error(streamError);
+        if (!content) throw new Error('模型返回为空');
+        return content;
+      }
+
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const ev = JSON.parse(trimmed);
+            if (ev.type === 'delta') {
+              content += ev.text || '';
+              options.onDelta(ev.text || '', content);
+            } else if (ev.type === 'done') {
+              content = ev.content || content;
+            } else if (ev.type === 'error') {
+              streamError = ev.error;
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      if (streamError) throw new Error(streamError);
+      if (!content) throw new Error('模型返回为空');
+      return content;
+    }
 
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -118,10 +185,10 @@ const NLP = {
     const name = assistant?.name || '时间喵';
     const reason = err?.message || '未知错误';
     const settings = this.getSettings();
-    let msg = `⚠️ ${name}没能连上 Kimi 大模型\n\n原因：${reason}\n\n请打开侧边栏「LLM 设置」检查 Base URL、API Key、模型名，并点击「测试连接」。\n\n当前配置：\n· Base URL: ${settings.baseUrl || '（未填）'}\n· 模型: ${settings.model || '（未填）'}`;
+    let msg = `⚠️ ${name}没能连上大模型\n\n原因：${reason}\n\n请打开侧边栏「LLM 设置」检查 Base URL、API Key、模型名，并点击「测试连接」。\n\n当前配置：\n· Base URL: ${settings.baseUrl || '（未填）'}\n· 模型: ${settings.model || '（未填）'}`;
 
     if (!this.isLLMConfigured(settings)) {
-      msg = `⚠️ ${name}当前是离线模式（未配置或未启用 LLM）\n\n请到侧边栏「LLM 设置」填写 Kimi API Key，并勾选「优先使用 LLM」。`;
+      msg = `⚠️ ${name}当前是离线模式（未配置或未启用 LLM）\n\n请到侧边栏「LLM 设置」填写 API Key 与模型名，并勾选「优先使用 LLM」。`;
     }
 
     return msg;
@@ -130,7 +197,7 @@ const NLP = {
   buildOfflineChatReply(text, assistant) {
     const name = assistant?.name || '时间喵';
     const answer = this.chatWithRules(text, assistant);
-    return `${answer}\n\n（💡 当前为离线回复；配置 Kimi 后可智能对话）`;
+    return `${answer}\n\n（💡 当前为离线回复；在「LLM 设置」配置大模型后可智能对话）`;
   },
 
   classifyWithRules(text) {
@@ -191,7 +258,7 @@ const NLP = {
     if (/你是谁|你叫什么|介绍一下/i.test(t)) {
       return this.pickOne([
         `我是${name}呀～${a.persona || '一只帮你管时间的小猫'}，有事尽管找我就好喵～`,
-        `${name}报到！平时陪你聊天，也能帮你把习惯和目标记成打卡卡片～`,
+        `${name}报到！平时陪你聊天、听你吐槽都可以找我喵～`,
       ]);
     }
     if (/你会干什么|你能干什么|你会做什么|你能做什么|有什么用|有什么功能|能帮我什么|怎么用|如何使用|帮助|help|能干嘛/i.test(t)) {
@@ -239,12 +306,12 @@ const NLP = {
         `嘿嘿…被夸了，尾巴都要翘起来了～`,
       ]);
     }
-    if (/什么大模型|用的什么模型|什么模型|kimi|moonshot/i.test(t)) {
+    if (/什么大模型|哪个大模型|走的是哪个|用的什么模型|什么模型|哪个模型/i.test(t)) {
       const settings = this.getSettings();
       if (this.isLLMConfigured(settings)) {
-        return `喵～${name}用的是 ${settings.model}（${settings.baseUrl}），通过服务端转发连接 Kimi 哦～`;
+        return `喵～${name}当前用的是 ${settings.model}，接口地址是 ${settings.baseUrl}～`;
       }
-      return `喵～${name}还没连上大模型呢，去侧边栏「LLM 设置」配置 Kimi API Key 吧～`;
+      return `喵～${name}还没连上大模型呢，去侧边栏「LLM 设置」配置一下吧～`;
     }
     if (/知道我是谁|我是谁|我叫什么/i.test(t)) {
       const profile = Store.getProfile();
@@ -255,7 +322,7 @@ const NLP = {
     }
 
     return this.pickOne([
-      `喵～${name}听到啦！你可以问我「你会干什么」，或直接说想记的习惯目标～`,
+      `喵～${name}听到啦！想聊天、吐槽、问问「你会干什么」，都可以跟我说～`,
       `嗯嗯，我在呢～不确定我能做什么的话，可以问我「你会干什么」哦！`,
     ]);
   },
@@ -267,8 +334,21 @@ const NLP = {
     const last = history[history.length - 1];
     if (last?.role === 'user' && last.content === text) history = history.slice(0, -1);
 
+    const emitLocal = async (reply) => {
+      const s = String(reply || '');
+      if (typeof context.onDelta === 'function') {
+        let acc = '';
+        for (let i = 0; i < s.length; i += 1) {
+          acc += s[i];
+          context.onDelta(s[i], acc);
+          await new Promise((r) => setTimeout(r, 8));
+        }
+      }
+      return s;
+    };
+
     if (!this.isLLMConfigured(settings)) {
-      return this.buildOfflineChatReply(text, assistant);
+      return emitLocal(this.buildOfflineChatReply(text, assistant));
     }
 
     try {
@@ -279,25 +359,32 @@ const NLP = {
 
 你的能力：
 - 闲聊、安慰、鼓励用户
-- 帮用户用自然语言创建/修改/覆盖打卡卡片（习惯、目标）
+${this.cardActionsEnabled ? '- 帮用户用自然语言创建/修改/覆盖打卡卡片（习惯、目标）' : '- 当前不创建、不修改打卡卡片；用户若要求记卡片，礼貌说明该功能暂未开放，并继续陪聊'}
 
 当前用户资料：${Store.getProfile()?.username ? `昵称 ${Store.getProfile().username}` : '未设置昵称'}
-当前 LLM：${settings.model}（Kimi / Moonshot）
+当前 LLM 模型名：${settings.model || '未配置'}
+当前 LLM 接口：${settings.baseUrl || '未配置'}
 
 回复要求：
 - 必须紧扣用户上一句话，直接回答问题
-- 用户问「你会干什么/你能做什么/用的什么模型」时，如实回答
+- 用户问「你会干什么/你能做什么」时，只说明当前已开放的能力
+- 用户问「用的什么模型/走哪个大模型」时，只根据上面的「当前 LLM」如实回答，不要编造或写死成某个厂商（如 Kimi）
 - 用户问「你知道我是谁吗」时，根据用户资料回答；不知道就诚实说不知道
+- **对于你解决不了、回答不了、或当前功能未开放的问题：必须直接明确告诉用户「做不到 / 答不了」并简述原因，不要含糊其辞、不要假装已完成、不要编造事实**
 - 不要泛泛地说「我在呢」，不要答非所问
 - 不要输出 JSON`,
         },
         ...history.map((m) => ({ role: m.role, content: m.content })),
         { role: 'user', content: text },
       ];
-      return await this.callLLM(messages, settings, { temperature: 0.85 });
+      return await this.callLLM(messages, settings, {
+        temperature: 0.85,
+        stream: Boolean(context.onDelta),
+        onDelta: context.onDelta,
+      });
     } catch (err) {
       console.warn('闲聊生成失败', err);
-      return this.buildLLMUnavailableReply(err, assistant, text);
+      return emitLocal(this.buildLLMUnavailableReply(err, assistant, text));
     }
   },
 

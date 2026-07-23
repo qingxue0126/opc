@@ -154,23 +154,64 @@ const BAGU_QUESTION_BANKS = [
 
 function getBaguBank(bankId) {
   if (!bankId) return null;
+  const override =
+    typeof Store !== 'undefined' && typeof Store.getBaguBankOverride === 'function'
+      ? Store.getBaguBankOverride(bankId)
+      : null;
   const builtin = BAGU_QUESTION_BANKS.find((b) => b.id === bankId);
-  if (builtin) return { ...builtin, builtin: true };
+  if (builtin) {
+    return {
+      ...builtin,
+      ...(override || {}),
+      id: builtin.id,
+      builtin: true,
+    };
+  }
   if (typeof Store !== 'undefined' && typeof Store.getCustomBaguBank === 'function') {
     const custom = Store.getCustomBaguBank(bankId);
-    if (custom) return { ...custom, custom: true };
+    if (custom) {
+      return {
+        ...custom,
+        ...(override || {}),
+        id: custom.id,
+        custom: true,
+      };
+    }
   }
   return null;
 }
 
-/** 内置 + 用户自定义题库 */
+/** 内置 + 用户自定义题库（按用户保存的顺序） */
 function listBaguBanks() {
-  const builtin = BAGU_QUESTION_BANKS.map((b) => ({ ...b, builtin: true }));
+  const builtin = BAGU_QUESTION_BANKS.map((b) => {
+    const override =
+      typeof Store !== 'undefined' && typeof Store.getBaguBankOverride === 'function'
+        ? Store.getBaguBankOverride(b.id)
+        : null;
+    return { ...b, ...(override || {}), builtin: true };
+  });
   const custom =
     typeof Store !== 'undefined' && typeof Store.getCustomBaguBanks === 'function'
-      ? Store.getCustomBaguBanks().map((b) => ({ ...b, custom: true }))
+      ? Store.getCustomBaguBanks().map((b) => {
+          const override =
+            typeof Store.getBaguBankOverride === 'function' ? Store.getBaguBankOverride(b.id) : null;
+          return { ...b, ...(override || {}), custom: true };
+        })
       : [];
-  return [...builtin, ...custom];
+  const all = [...builtin, ...custom];
+  if (typeof Store === 'undefined' || typeof Store.getBaguBankOrder !== 'function') return all;
+  const order = Store.getBaguBankOrder();
+  if (!order.length) return all;
+  const byId = new Map(all.map((b) => [b.id, b]));
+  const sorted = [];
+  order.forEach((id) => {
+    if (byId.has(id)) {
+      sorted.push(byId.get(id));
+      byId.delete(id);
+    }
+  });
+  byId.forEach((b) => sorted.push(b));
+  return sorted;
 }
 
 function baguBankSelectOptions() {
@@ -215,7 +256,24 @@ const DEPARTMENTS = [
             options: BAGU_QUESTION_BANKS.map((b) => ({ value: b.id, label: b.name })),
             required: true,
           },
-          { key: 'category', label: '分类', type: 'bagu-category' },
+          {
+            key: 'category',
+            label: '分类',
+            type: 'bagu-category',
+            placeholder: '二级单元，如「索引」「事务与锁」，不要过细',
+          },
+          {
+            key: 'tags',
+            label: '标签',
+            type: 'text',
+            placeholder: '三级小模块，每题 1-3 个，逗号分隔，如 覆盖索引,最左前缀',
+          },
+          {
+            key: 'keypoints',
+            label: '考点',
+            type: 'text',
+            placeholder: '四级考点，可多个，逗号分隔，如 回表代价,索引下推条件',
+          },
           {
             key: 'difficulty',
             label: '难度',
@@ -223,7 +281,13 @@ const DEPARTMENTS = [
             options: ['简单', '中等', '困难'],
             default: '中等',
           },
-          { key: 'tags', label: '标签', type: 'text', placeholder: '多个标签用逗号分隔，如 索引,InnoDB' },
+          {
+            key: 'frequency',
+            label: '频率',
+            type: 'select',
+            options: ['高频', '中频', '低频'],
+            default: '中频',
+          },
           { key: 'approach', label: '回答思路', type: 'richtext' },
           { key: 'answer', label: '参考答案', type: 'richtext' },
           { key: 'followUp', label: '可能追问', type: 'richtext' },
@@ -333,13 +397,12 @@ const DEPARTMENTS = [
     id: 'living',
     order: '02',
     name: '生活',
-    desc: '作息 · 健康 · 学习 · 仪容',
+    desc: '健康 · 学习 · 仪容',
     layout: 'accordion',
     color: '#388BFF',
     bg: '#F5F5F5',
     sections: [
-      { id: 'routine', name: '作息', icon: '🌅', moduleIds: ['health', 'sleep'] },
-      { id: 'fitness', name: '健康', icon: '💪', moduleIds: ['exercise', 'weight'] },
+      { id: 'fitness', name: '健康', icon: '💪', moduleIds: ['health', 'sleep', 'exercise', 'weight'] },
       { id: 'study', name: '学习', icon: '📚', moduleIds: ['study'] },
       { id: 'beauty', name: '仪容', icon: '✨', moduleIds: ['facemask', 'hairmask', 'hairremoval'] },
     ],
@@ -349,7 +412,7 @@ const DEPARTMENTS = [
         name: '早晨启动',
         icon: '🌅',
         desc: '每日晨间习惯清单',
-        sectionId: 'routine',
+        sectionId: 'fitness',
         recordView: 'habitChecklist',
         habitChecklist: ['梳头', '刷牙', '洗脸', '护肤', '喝一杯温水'],
       },
@@ -358,7 +421,7 @@ const DEPARTMENTS = [
         name: '睡眠',
         icon: '🌙',
         desc: '小憩与长睡眠',
-        sectionId: 'routine',
+        sectionId: 'fitness',
         editable: true,
         recordMenu: true,
         fields: [
@@ -387,13 +450,12 @@ const DEPARTMENTS = [
         id: 'exercise',
         name: '运动',
         icon: '🏃',
-        desc: '类型与时长',
+        desc: '周打卡与每日详情',
         sectionId: 'fitness',
-        fields: [
-          { key: 'type', label: '类型', type: 'text', placeholder: '跑步/瑜伽/力量...' },
-          { key: 'duration', label: '时长(分钟)', type: 'number' },
-          { key: 'feeling', label: '感受', type: 'textarea' },
-        ],
+        recordView: 'exerciseHub',
+        moduleKind: 'customCheckin',
+        checkinFreq: 'weekly',
+        editable: true,
       },
       {
         id: 'weight',
@@ -447,8 +509,8 @@ const DEPARTMENTS = [
     name: '副业（🚧 施工中）',
     desc: '第二增长曲线',
     layout: 'accordion',
-    color: '#EA580C',
-    bg: '#FFF7ED',
+    color: '#388BFF',
+    bg: '#F5F5F5',
     modules: [
       {
         id: 'xiaohongshu',
@@ -485,8 +547,8 @@ const DEPARTMENTS = [
     name: '休息（🚧 施工中）',
     desc: '休息充电',
     layout: 'accordion',
-    color: '#7C3AED',
-    bg: '#F5F3FF',
+    color: '#388BFF',
+    bg: '#F5F5F5',
     modules: [
       {
         id: 'travel',

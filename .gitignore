@@ -1,3 +1,11 @@
 data/opc_dashboard_data.json
 data/users.json
 data/users/
+
+# 文档在仓库外（../docs），若误放进本目录也不提交
+docs/
+Docs/
+
+# 飞书 Hook 密钥与日志
+.cursor/hooks/.env
+.cursor/hooks/feishu-hook.log
