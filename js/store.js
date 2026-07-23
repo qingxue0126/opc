@@ -47,7 +47,7 @@ const Store = {
   },
 
   _emptyData() {
-    return { records: {}, cards: [], settings: {}, chatMessages: [] };
+    return { records: {}, cards: [], settings: {}, chatMessages: [], baguCat: {} };
   },
 
   _hasUserData(data) {
@@ -56,6 +56,7 @@ const Store = {
     if ((data.cards || []).length > 0) return true;
     if (data.settings && Object.keys(data.settings).length > 0) return true;
     if ((data.chatMessages || []).length > 0) return true;
+    if (data.baguCat && Object.keys(data.baguCat).length > 0) return true;
     return false;
   },
 
@@ -102,6 +103,9 @@ const Store = {
 
   migrate(data) {
     if (!data.records) return data;
+    if (!data.baguCat || typeof data.baguCat !== 'object') {
+      data.baguCat = {};
+    }
 
     let changed = false;
     const records = { ...data.records };
@@ -171,6 +175,19 @@ const Store = {
     }
 
 
+    // 生活：旧「作息」板块并入「健康」
+    if (Array.isArray(data.settings.customLivingModules)) {
+      let livingChanged = false;
+      data.settings.customLivingModules = data.settings.customLivingModules.map((m) => {
+        if (m?.sectionId === 'routine') {
+          livingChanged = true;
+          return { ...m, sectionId: 'fitness' };
+        }
+        return m;
+      });
+      if (livingChanged) changed = true;
+    }
+
     data.settings = data.settings || {};
     if (!Array.isArray(data.settings.recycleBin)) {
       data.settings.recycleBin = [];
@@ -210,6 +227,18 @@ const Store = {
         changed = true;
       }
     }
+    // 八股题：旧数据补全频率字段，保证所有题库列表都能显示
+    const baguKey = 'core.bagu';
+    if (Array.isArray(records[baguKey])) {
+      records[baguKey] = records[baguKey].map((r) => {
+        if (!r || typeof r !== 'object') return r;
+        const freq = String(r.frequency || '').trim();
+        if (['高频', '中频', '低频'].includes(freq)) return r;
+        changed = true;
+        return { ...r, frequency: '中频' };
+      });
+    }
+
     if (typeof this._purgeExpiredRecycleBin === 'function') {
       if (this._purgeExpiredRecycleBin(data)) {
         changed = true;
@@ -597,6 +626,68 @@ const Store = {
     return list.map((b) => this._normalizeCustomBaguBank(b)).filter(Boolean);
   },
 
+  getBaguBankOrder() {
+    const saved = this.getSettings().baguBankOrder;
+    return Array.isArray(saved) ? saved.map(String).filter(Boolean) : [];
+  },
+
+  getBaguBankOverride(bankId) {
+    if (!bankId) return null;
+    const map = this.getSettings().baguBankOverrides;
+    if (!map || typeof map !== 'object') return null;
+    const raw = map[bankId];
+    if (!raw || typeof raw !== 'object') return null;
+    const out = {};
+    if (raw.desc != null) out.desc = String(raw.desc);
+    if (raw.name != null && String(raw.name).trim()) out.name = String(raw.name).trim();
+    return Object.keys(out).length ? out : null;
+  },
+
+  /** 更新题库介绍/名称：自定义题库写库表；内置题库写 overrides */
+  updateBaguBankMeta(bankId, partial = {}) {
+    if (!bankId) return null;
+    const patch = {};
+    if (partial.desc != null) patch.desc = String(partial.desc).trim();
+    if (partial.name != null) {
+      const name = String(partial.name).trim();
+      if (name) patch.name = name;
+    }
+    if (!Object.keys(patch).length) return null;
+
+    const custom = this.getCustomBaguBank(bankId);
+    if (custom) {
+      if (patch.name && this.isBaguBankNameTaken(patch.name, bankId)) return null;
+      return this.updateCustomBaguBank(bankId, patch);
+    }
+
+    const data = this.load();
+    data.settings = data.settings || {};
+    data.settings.baguBankOverrides = {
+      ...(data.settings.baguBankOverrides || {}),
+    };
+    const prev = data.settings.baguBankOverrides[bankId] || {};
+    data.settings.baguBankOverrides[bankId] = { ...prev, ...patch };
+    this.save(data);
+    return { id: bankId, ...prev, ...patch };
+  },
+
+  setBaguBankOrder(ids) {
+    const data = this.load();
+    data.settings = data.settings || {};
+    const list = Array.isArray(ids) ? ids.map(String).filter(Boolean) : [];
+    data.settings.baguBankOrder = list;
+    this.save(data);
+  },
+
+  /** 用当前全部题库补全顺序（新题库接到末尾） */
+  ensureBaguBankOrder(allBanks) {
+    const banks = Array.isArray(allBanks) ? allBanks : [];
+    const ids = banks.map((b) => b.id);
+    const saved = this.getBaguBankOrder().filter((id) => ids.includes(id));
+    const missing = ids.filter((id) => !saved.includes(id));
+    return [...saved, ...missing];
+  },
+
   getCustomBaguBank(bankId) {
     if (!bankId) return null;
     return this.getCustomBaguBanks().find((b) => b.id === bankId) || null;
@@ -636,6 +727,10 @@ const Store = {
     data.settings = data.settings || {};
     data.settings.customBaguBanks = this.getCustomBaguBanks();
     data.settings.customBaguBanks.push(entry);
+    const order = this.getBaguBankOrder();
+    if (order.length) {
+      data.settings.baguBankOrder = order.includes(entry.id) ? order : [...order, entry.id];
+    }
     this.save(data);
     return entry;
   },
@@ -668,6 +763,9 @@ const Store = {
     const data = this.load();
     data.settings = data.settings || {};
     data.settings.customBaguBanks = this.getCustomBaguBanks().filter((b) => b.id !== bankId);
+    if (Array.isArray(data.settings.baguBankOrder)) {
+      data.settings.baguBankOrder = data.settings.baguBankOrder.filter((id) => id !== bankId);
+    }
     if (data.settings.baguSort) {
       const prefix = `core.bagu.${bankId}`;
       // baguSortKey is dept.module.bank
@@ -749,8 +847,10 @@ const Store = {
         ...record,
         category: patch.category || record.category,
         difficulty: patch.difficulty || record.difficulty,
+        frequency: patch.frequency || record.frequency,
         learnOrder: patch.learnOrder,
         tags: patch.tags != null && patch.tags !== '' ? patch.tags : record.tags,
+        keypoints: patch.keypoints != null && patch.keypoints !== '' ? patch.keypoints : record.keypoints,
         updatedAt: now,
       };
     });
@@ -763,6 +863,89 @@ const Store = {
       categoryOrder: layout.categoryOrder,
       questionOrder: layout.questionOrder,
     });
+  },
+
+  /** 合并多个分类到一个新名 */
+  mergeBaguCategories(deptId, moduleId, bankId, fromCategories, toCategory) {
+    const from = (Array.isArray(fromCategories) ? fromCategories : [fromCategories])
+      .map((c) => String(c || '').trim())
+      .filter(Boolean);
+    const to = String(toCategory || '').trim();
+    if (!bankId || !from.length || !to) return false;
+
+    const data = this.load();
+    const key = this.recordKey(deptId, moduleId);
+    const list = data.records[key] || [];
+    const now = new Date().toISOString();
+    let changed = false;
+    list.forEach((record, idx) => {
+      if (record.bank !== bankId) return;
+      const cat = this._baguCategoryKey(record);
+      if (!from.includes(cat)) return;
+      list[idx] = { ...record, category: to, updatedAt: now };
+      changed = true;
+    });
+    if (!changed) return false;
+    this.save(data);
+    this.syncBaguSortAfterChange(deptId, moduleId, bankId);
+
+    const sort = this.getBaguSort(deptId, moduleId, bankId);
+    if (sort.mode === 'custom') {
+      let order = (sort.categoryOrder || []).filter((c) => c !== to && !from.includes(c));
+      const insertAt = Math.min(
+        ...from.map((c) => {
+          const i = (sort.categoryOrder || []).indexOf(c);
+          return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+        })
+      );
+      if (insertAt < order.length) order.splice(insertAt, 0, to);
+      else order.push(to);
+      // 去重保序
+      order = [...new Set(order)];
+      this.setBaguSort(deptId, moduleId, bankId, { categoryOrder: order });
+      this.syncBaguSortAfterChange(deptId, moduleId, bankId);
+    }
+    return true;
+  },
+
+  /** 拆分一个分类：splits = [{category, questionIds}] */
+  splitBaguCategory(deptId, moduleId, bankId, fromCategory, splits) {
+    const from = String(fromCategory || '').trim();
+    const parts = Array.isArray(splits) ? splits : [];
+    if (!bankId || !from || !parts.length) return false;
+
+    const data = this.load();
+    const key = this.recordKey(deptId, moduleId);
+    const list = data.records[key] || [];
+    const now = new Date().toISOString();
+    const idToCat = new Map();
+    parts.forEach((s) => {
+      const cat = String(s.category || '').trim();
+      if (!cat) return;
+      (Array.isArray(s.questionIds) ? s.questionIds : []).forEach((id) => {
+        idToCat.set(String(id), cat);
+      });
+    });
+    if (!idToCat.size) return false;
+
+    let changed = false;
+    list.forEach((record, idx) => {
+      if (record.bank !== bankId) return;
+      if (this._baguCategoryKey(record) !== from) return;
+      const nextCat = idToCat.get(String(record.id));
+      if (!nextCat || nextCat === from) return;
+      list[idx] = { ...record, category: nextCat, updatedAt: now };
+      changed = true;
+    });
+    if (!changed) return false;
+    this.save(data);
+    this.syncBaguSortAfterChange(deptId, moduleId, bankId);
+    return true;
+  },
+
+  /** 重命名分类 */
+  renameBaguCategory(deptId, moduleId, bankId, fromCategory, toCategory) {
+    return this.mergeBaguCategories(deptId, moduleId, bankId, [fromCategory], toCategory);
   },
 
   getTodayHabitRecord(deptId, moduleId) {
@@ -828,6 +1011,131 @@ const Store = {
     const label = todayWeekdayLabel();
     const record = this.getWeekCheckinRecord(deptId, moduleId);
     return Boolean(record?.days?.[label]);
+  },
+
+  /** 运动时长：HH:MM → 分钟 */
+  parseDurationToMinutes(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return 0;
+    const m = raw.match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return 0;
+    return Number(m[1]) * 60 + Number(m[2]);
+  },
+
+  formatMinutesAsDuration(mins) {
+    const n = Math.max(0, Math.round(Number(mins) || 0));
+    const h = Math.floor(n / 60);
+    const m = n % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  },
+
+  getExerciseDayDetail(deptId, moduleId, dateStr) {
+    const date = String(dateStr || '').slice(0, 10);
+    if (!date) return null;
+    const rec =
+      this.getRawRecords(deptId, moduleId).find((r) => String(r.date || '').slice(0, 10) === date) ||
+      null;
+    if (!rec) return null;
+    const startTime = String(rec.startTime || '').slice(0, 5);
+    const endRaw = String(rec.endTime || '').slice(0, 5);
+    return {
+      id: rec.id,
+      date,
+      minutes: Math.max(0, Math.round(Number(rec.minutes) || 0)),
+      startTime,
+      endTime: endRaw || startTime,
+      project: String(rec.project || '').trim(),
+    };
+  },
+
+  setExerciseDayDetail(deptId, moduleId, dateStr, patch = {}) {
+    const date = String(dateStr || '').slice(0, 10);
+    if (!date) return null;
+    const startTime = String(patch.startTime != null ? patch.startTime : '').slice(0, 5);
+    let endTime = String(patch.endTime != null ? patch.endTime : '').slice(0, 5);
+    if (!endTime) endTime = startTime;
+    let minutes =
+      patch.minutes != null
+        ? Math.max(0, Math.round(Number(patch.minutes) || 0))
+        : this.parseDurationToMinutes(patch.duration);
+    if (!minutes && startTime && endTime) {
+      const a = this.parseDurationToMinutes(startTime);
+      const b = this.parseDurationToMinutes(endTime);
+      minutes = b >= a ? b - a : b + 24 * 60 - a;
+    }
+    const project = String(patch.project != null ? patch.project : '').trim();
+    const existing = this.getExerciseDayDetail(deptId, moduleId, date);
+    const empty = !minutes && !startTime && !project;
+    if (empty) {
+      if (existing?.id) this.deleteRecord(deptId, moduleId, existing.id);
+      return null;
+    }
+    const payload = { date, minutes, startTime, endTime, project };
+    if (existing?.id) {
+      return this.updateRecord(deptId, moduleId, existing.id, payload);
+    }
+    return this.addRecord(deptId, moduleId, payload);
+  },
+
+  getExerciseTimeRecord(deptId, moduleId, dateStr) {
+    return this.getExerciseDayDetail(deptId, moduleId, dateStr);
+  },
+
+  setExerciseTimeMinutes(deptId, moduleId, dateStr, minutes) {
+    return this.setExerciseDayDetail(deptId, moduleId, dateStr, { minutes });
+  },
+
+  getExerciseProjects() {
+    const list = this.getSettings().exerciseProjects;
+    return Array.isArray(list) ? list : [];
+  },
+
+  addExerciseProject({ name = '', desc = '' } = {}) {
+    const title = String(name || '').trim();
+    if (!title) return null;
+    const data = this.load();
+    data.settings = data.settings || {};
+    data.settings.exerciseProjects = Array.isArray(data.settings.exerciseProjects)
+      ? data.settings.exerciseProjects
+      : [];
+    const item = {
+      id: crypto.randomUUID(),
+      name: title,
+      desc: String(desc || '').trim(),
+      createdAt: new Date().toISOString(),
+    };
+    data.settings.exerciseProjects.push(item);
+    this.save(data);
+    return item;
+  },
+
+  updateExerciseProject(projectId, patch = {}) {
+    if (!projectId) return null;
+    const data = this.load();
+    data.settings = data.settings || {};
+    const list = Array.isArray(data.settings.exerciseProjects) ? data.settings.exerciseProjects : [];
+    const idx = list.findIndex((p) => p.id === projectId);
+    if (idx < 0) return null;
+    const prev = list[idx];
+    const next = {
+      ...prev,
+      name: patch.name != null ? String(patch.name || '').trim() : prev.name,
+      desc: patch.desc != null ? String(patch.desc || '').trim() : prev.desc,
+    };
+    if (!next.name) return null;
+    list[idx] = next;
+    data.settings.exerciseProjects = list;
+    this.save(data);
+    return next;
+  },
+
+  deleteExerciseProject(projectId) {
+    if (!projectId) return;
+    const data = this.load();
+    data.settings = data.settings || {};
+    const list = Array.isArray(data.settings.exerciseProjects) ? data.settings.exerciseProjects : [];
+    data.settings.exerciseProjects = list.filter((p) => p.id !== projectId);
+    this.save(data);
   },
 
   getDailyCheckinRecord(deptId, moduleId, date = todayStr()) {
@@ -1124,6 +1432,68 @@ const Store = {
     data.chatMessages.push(entry);
     this.save(data);
     return entry;
+  },
+
+  _baguCatBankBucket(data, bankId) {
+    const id = String(bankId || '').trim();
+    if (!id) return null;
+    data.baguCat = data.baguCat || {};
+    if (!data.baguCat[id]) {
+      data.baguCat[id] = { messages: [], pending: null };
+    }
+    if (!Array.isArray(data.baguCat[id].messages)) data.baguCat[id].messages = [];
+    return data.baguCat[id];
+  },
+
+  getBaguCatMessages(bankId) {
+    const data = this.load();
+    const bucket = this._baguCatBankBucket(data, bankId);
+    if (!bucket) return [];
+    if (!bucket.messages.length) {
+      bucket.messages.push({
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content:
+          '喵～我是八股猫。可以说「合并分类」「拆分分类」「统计频率」「写题库介绍」等。换种说法我也能懂；做不到的事会直说卡点～',
+        time: Date.now(),
+        createdAt: new Date().toISOString(),
+      });
+      this.save(data);
+    }
+    return bucket.messages;
+  },
+
+  addBaguCatMessage(bankId, message) {
+    const data = this.load();
+    const bucket = this._baguCatBankBucket(data, bankId);
+    if (!bucket) return null;
+    const entry = {
+      id: crypto.randomUUID(),
+      time: Date.now(),
+      createdAt: new Date().toISOString(),
+      ...message,
+    };
+    bucket.messages.push(entry);
+    // 每库最多保留 200 条，避免无限膨胀
+    if (bucket.messages.length > 200) {
+      bucket.messages = bucket.messages.slice(-200);
+    }
+    this.save(data);
+    return entry;
+  },
+
+  getBaguCatPending(bankId) {
+    const data = this.load();
+    const bucket = this._baguCatBankBucket(data, bankId);
+    return bucket?.pending || null;
+  },
+
+  setBaguCatPending(bankId, pending) {
+    const data = this.load();
+    const bucket = this._baguCatBankBucket(data, bankId);
+    if (!bucket) return;
+    bucket.pending = pending && typeof pending === 'object' ? pending : null;
+    this.save(data);
   },
 
   getSettings() {
@@ -3260,6 +3630,7 @@ const Store = {
       cards: parsed.cards || [],
       settings: parsed.settings || {},
       chatMessages: parsed.chatMessages || [],
+      baguCat: parsed.baguCat || {},
     };
     this.save(this.migrate(data));
   },

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OPC · 个人公司仪表盘</title>
   <link href="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.snow.css" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=20260722dh">
+  <link rel="stylesheet" href="css/style.css?v=20260723n">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -108,11 +108,31 @@
     </div>
   </div>
 
+  <div class="bagu-cat-overlay hidden" id="baguCatOverlay" role="dialog" aria-modal="true" aria-labelledby="baguCatTitle">
+    <div class="bagu-cat-panel">
+      <header class="bagu-cat-header">
+        <div class="bagu-cat-header-info">
+          <span class="bagu-cat-header-avatar" aria-hidden="true"><img src="/images/bagu-cat.png" alt=""></span>
+          <div>
+            <h3 id="baguCatTitle">八股猫</h3>
+            <p id="baguCatSub">题库助手</p>
+          </div>
+        </div>
+        <button type="button" class="modal-close" id="baguCatClose" aria-label="关闭">×</button>
+      </header>
+      <div class="bagu-cat-messages" id="baguCatMessages"></div>
+      <div class="bagu-cat-input-area">
+        <textarea id="baguCatInput" class="bagu-cat-input" rows="1" placeholder="跟八股猫说：合并分类、拆分分类、排序、生成答案…"></textarea>
+        <button type="button" class="btn btn-primary bagu-cat-send" id="btnBaguCatSend">发送</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.min.js"></script>
-  <script src="js/config.js?v=20260722dh"></script>
-  <script src="js/store.js?v=20260722dh"></script>
-  <script src="js/rich-editor.js?v=20260722dh"></script>
-  <script src="js/nlp.js?v=20260722dh"></script>
-  <script src="js/app.js?v=20260722dh"></script>
+  <script src="js/config.js?v=20260723n"></script>
+  <script src="js/store.js?v=20260723n"></script>
+  <script src="js/rich-editor.js?v=20260723n"></script>
+  <script src="js/nlp.js?v=20260723n"></script>
+  <script src="js/app.js?v=20260723n"></script>
 </body>
 </html>

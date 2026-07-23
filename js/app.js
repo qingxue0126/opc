@@ -5,6 +5,12 @@ const App = {
   baguDraft: null,
   baguEditing: null,
   baguCollapsed: {},
+  baguBankSorting: false,
+  baguBankOrderDraft: null, // string[] | null
+  baguCatOpen: null, // { deptId, moduleId, bankId } | null
+  baguCatBusy: false,
+  // pending 按题库存 Store，这里仅缓存当前会话打开态
+  baguCatPending: null,
   sleepViewMode: 'day', // day | week | month
   sleepViewAnchor: null, // YYYY-MM-DD
   sleepMonthMetric: 'total', // total | long | nap
@@ -25,6 +31,7 @@ const App = {
   calendarMonth: null,
   calendarViewDate: null,
   calendarFocusTaskId: null,
+  exerciseSheetDate: null, // 运动日详情弹窗 YYYY-MM-DD
   navExpanded: null, // Set<deptId> 侧栏展开的部门
   checkinWeekByModule: null, // { 'living.facemask': '2026-W30' }
   _scrollToAccordionModule: null,
@@ -251,6 +258,8 @@ const App = {
   },
 
   navigateToSection(deptId, sectionId) {
+    // 旧「作息」已并入「健康」
+    if (deptId === 'living' && sectionId === 'routine') sectionId = 'fitness';
     const section = getDeptSection(deptId, sectionId);
     if (!section) {
       this.navigateToDept(deptId);
@@ -449,8 +458,13 @@ const App = {
         const mod = getModule(this.route.deptId, this.route.moduleId);
         const dept = getDepartment(this.route.deptId);
         if (mod?.recordView === 'bagu' && this.route.baguBank) {
-          const bank = getBaguBank(this.route.baguBank);
-          title.textContent = bank ? `${bank.name} 面试题` : mod?.name || '八股';
+          if (this.route.baguQuestion) {
+            const record = Store.getRecord(this.route.deptId, this.route.moduleId, this.route.baguQuestion);
+            title.textContent = record?.title || '题目';
+          } else {
+            const bank = getBaguBank(this.route.baguBank);
+            title.textContent = bank ? `${bank.name} 面试题` : mod?.name || '八股';
+          }
         } else {
           title.textContent = mod?.name || dept?.name || '模块';
         }
@@ -3081,16 +3095,16 @@ const App = {
     el.classList.remove('chat-llm-ok', 'chat-llm-error', 'chat-llm-offline');
 
     if (!status.configured) {
-      el.textContent = `离线模式 · ${status.error || '未配置 LLM'}`;
+      el.innerHTML = `<span class="chat-status-dot" aria-hidden="true"></span>离线`;
       el.classList.add('chat-llm-offline');
       return;
     }
     if (status.connected) {
-      el.textContent = `Kimi 已连接 · ${status.model}`;
+      el.innerHTML = `<span class="chat-status-dot" aria-hidden="true"></span>已在线`;
       el.classList.add('chat-llm-ok');
       return;
     }
-    el.textContent = `Kimi 未连上 · ${status.error || '请检查 LLM 设置'}`;
+    el.innerHTML = `<span class="chat-status-dot" aria-hidden="true"></span>未连上`;
     el.classList.add('chat-llm-error');
   },
 
@@ -3105,7 +3119,7 @@ const App = {
           ${this.renderChatAvatar('assistant')}
           <div class="chat-header-info">
             <h3>${this.escapeHtml(assistant.name)}</h3>
-            <p id="chatLlmStatus">${collapsed ? '已收起 · 点击右侧展开' : '检测 Kimi 连接中…'}</p>
+            <p id="chatLlmStatus">${collapsed ? '已收起 · 点击右侧展开' : '<span class="chat-status-dot" aria-hidden="true"></span>检测中…'}</p>
           </div>
         </button>
         <button type="button" class="chat-collapse-btn" id="btnChatCollapse" title="${collapsed ? '展开时间喵' : '收起时间喵'}" aria-expanded="${collapsed ? 'false' : 'true'}">
@@ -3275,17 +3289,59 @@ const App = {
     const assistant = Store.getAssistant();
     const recentMessages = Store.getChatMessages().slice(-10);
 
+    const streamAssistantReply = async (factory) => {
+      let streamId = null;
+      let bubbleEl = null;
+      const onDelta = (_delta, full) => {
+        if (!streamId) {
+          this.hideChatTyping();
+          streamId = `chatStream-${Date.now()}`;
+          const container = document.getElementById('chatMessages');
+          if (!container) return;
+          container.insertAdjacentHTML(
+            'beforeend',
+            `<div class="chat-msg chat-msg-assistant" id="${streamId}">
+              ${this.renderChatAvatar('assistant')}
+              <div class="chat-msg-body">
+                <div class="chat-msg-bubble"><span class="chat-stream-text"></span></div>
+              </div>
+            </div>`
+          );
+          bubbleEl = document.querySelector(`#${streamId} .chat-stream-text`);
+        }
+        if (bubbleEl) {
+          bubbleEl.innerHTML = this.formatChatContent(full);
+          this.scrollChatToBottom();
+        }
+      };
+
+      const reply = await factory(onDelta);
+      this.hideChatTyping();
+      document.getElementById(streamId)?.remove();
+      const assistantMsg = Store.addChatMessage({ role: 'assistant', content: reply });
+      this.appendChatMessageToDom(assistantMsg);
+      return reply;
+    };
+
     try {
+      // 卡片创建/修改暂时关闭：一律走闲聊
+      if (!NLP.cardActionsEnabled) {
+        await streamAssistantReply((onDelta) =>
+          NLP.generateChatReply(text, { assistant, recentMessages, onDelta })
+        );
+        return;
+      }
+
       const { intent, llmError } = await NLP.classifyIntent(text, { assistant, recentMessages });
 
       if (intent === 'chat') {
-        let reply = await NLP.generateChatReply(text, { assistant, recentMessages });
-        if (llmError && !reply.startsWith('⚠️')) {
-          reply = `（意图识别已降级为离线规则）\n\n${reply}`;
-        }
-        this.hideChatTyping();
-        const assistantMsg = Store.addChatMessage({ role: 'assistant', content: reply });
-        this.appendChatMessageToDom(assistantMsg);
+        await streamAssistantReply(async (onDelta) => {
+          let reply = await NLP.generateChatReply(text, { assistant, recentMessages, onDelta });
+          if (llmError && !reply.startsWith('⚠️')) {
+            reply = `（意图识别已降级为离线规则）\n\n${reply}`;
+          }
+          return reply;
+        });
       } else {
         const existingCards = Store.getCards();
         const parsed = await NLP.parse(text, { existingCards });
@@ -3305,6 +3361,7 @@ const App = {
       }
     } catch (err) {
       this.hideChatTyping();
+      document.querySelector('[id^="chatStream-"]')?.remove();
       const assistantMsg = Store.addChatMessage({
         role: 'assistant',
         content: `喵…${assistant.name || '时间喵'}有点迷糊了：${err.message || '换个说法试试？'}`,
@@ -4658,7 +4715,8 @@ const App = {
     this.checkinWeekByModule = { ...(this.checkinWeekByModule || {}), [`${deptId}.${moduleId}`]: next };
   },
 
-  renderWeekdayCheckin(deptId, moduleId, mod) {
+  renderWeekdayCheckin(deptId, moduleId, mod, options = {}) {
+    const omitHead = Boolean(options.omitHead);
     const weekdays = getCheckinDays(mod) || WEEKDAY_LABELS;
     const weekKey = this.getCheckinWeekKey(deptId, moduleId);
     const currentWeek = Store.weekKey();
@@ -4671,9 +4729,9 @@ const App = {
       (isCurrentWeek && dayMap[todayLabel]?.date) || dayEntries[0]?.date || todayStr();
     const calIcon = `<svg class="checkin-week-cal-svg" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><rect x="3" y="5" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3 10h18" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 3v4M16 3v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`;
 
-    return `
-      <div class="weekday-checkin custom-checkin" data-dept="${deptId}" data-module="${moduleId}" data-week="${this.escapeHtml(weekKey)}">
-        <div class="habit-checklist-head checkin-week-head">
+    const head = omitHead
+      ? ''
+      : `<div class="habit-checklist-head checkin-week-head">
           <div class="checkin-week-tools" role="group" aria-label="选择周">
             <label class="checkin-week-cal" title="选择日期">
               <input type="date" class="checkin-week-date-input" value="${this.escapeHtml(pickerDate)}" aria-label="选择日期">
@@ -4682,7 +4740,11 @@ const App = {
             <button type="button" class="checkin-week-btn btn-checkin-week-prev" title="上一周" aria-label="上一周">${this.chevronIcon('prev')}</button>
             <button type="button" class="checkin-week-btn btn-checkin-week-next" title="下一周" aria-label="下一周">${this.chevronIcon('next')}</button>
           </div>
-        </div>
+        </div>`;
+
+    return `
+      <div class="weekday-checkin custom-checkin" data-dept="${deptId}" data-module="${moduleId}" data-week="${this.escapeHtml(weekKey)}">
+        ${head}
         <div class="weekday-grid">
           ${weekdays
             .map((label) => {
@@ -4724,9 +4786,154 @@ const App = {
   },
 
   renderHabitBody(deptId, moduleId, mod) {
+    if (mod?.recordView === 'exerciseHub') return this.renderExerciseHubBody(deptId, moduleId, mod);
     if (isCustomCheckinModule(mod)) return this.renderCustomCheckin(deptId, moduleId, mod);
     if (mod.recordView === 'habitChecklist') return this.renderHabitChecklist(deptId, moduleId, mod);
     return '';
+  },
+
+  renderExerciseHubWeekHead(deptId, moduleId) {
+    const weekKey = this.getCheckinWeekKey(deptId, moduleId);
+    const currentWeek = Store.weekKey();
+    const isCurrentWeek = weekKey === currentWeek;
+    const todayLabel = todayWeekdayLabel();
+    const dayEntries = Store.weekDayEntries(weekKey);
+    const dayMap = Object.fromEntries(dayEntries.map((d) => [d.label, d]));
+    const pickerDate =
+      (isCurrentWeek && dayMap[todayLabel]?.date) || dayEntries[0]?.date || todayStr();
+    const range = String(Store.weekRangeLabel(weekKey) || weekKey).replace(/\//g, '.');
+    const calIcon = `<svg class="checkin-week-cal-svg" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><rect x="3" y="5" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3 10h18" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 3v4M16 3v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`;
+    return `
+      <div class="habit-checklist-head checkin-week-head exercise-hub-week-head" data-dept="${deptId}" data-module="${moduleId}" data-week="${this.escapeHtml(weekKey)}">
+        <span class="habit-checklist-date">${this.escapeHtml(range)}${isCurrentWeek ? '（本周）' : ''}</span>
+        <div class="checkin-week-tools" role="group" aria-label="选择周">
+          <label class="checkin-week-cal" title="选择日期">
+            <input type="date" class="checkin-week-date-input" value="${this.escapeHtml(pickerDate)}" aria-label="选择日期">
+            <span class="checkin-week-cal-btn" aria-hidden="true">${calIcon}</span>
+          </label>
+          <button type="button" class="checkin-week-btn btn-checkin-week-prev" title="上一周" aria-label="上一周">${this.chevronIcon('prev')}</button>
+          <button type="button" class="checkin-week-btn btn-checkin-week-next" title="下一周" aria-label="下一周">${this.chevronIcon('next')}</button>
+        </div>
+      </div>`;
+  },
+
+  renderExerciseHubBody(deptId, moduleId, mod) {
+    const sheetOpen = Boolean(this.exerciseSheetDate);
+    return `
+      <div class="exercise-hub${sheetOpen ? ' is-sheet-open' : ''}" data-dept="${deptId}" data-module="${moduleId}">
+        ${this.renderExerciseHubWeekHead(deptId, moduleId)}
+        ${this.renderExerciseCheckinGrid(deptId, moduleId, mod)}
+        ${
+          sheetOpen
+            ? this.renderExerciseSheet(deptId, moduleId, this.exerciseSheetDate)
+            : ''
+        }
+      </div>`;
+  },
+
+  renderExerciseCheckinGrid(deptId, moduleId, mod) {
+    const weekdays = getCheckinDays(mod) || WEEKDAY_LABELS;
+    const weekKey = this.getCheckinWeekKey(deptId, moduleId);
+    const currentWeek = Store.weekKey();
+    const isCurrentWeek = weekKey === currentWeek;
+    const record = Store.getWeekCheckinRecord(deptId, moduleId, weekKey);
+    const todayLabel = todayWeekdayLabel();
+    const dayEntries = Store.weekDayEntries(weekKey);
+    const dayMap = Object.fromEntries(dayEntries.map((d) => [d.label, d]));
+
+    return `
+      <div class="weekday-checkin custom-checkin exercise-checkin" data-dept="${deptId}" data-module="${moduleId}" data-week="${this.escapeHtml(weekKey)}">
+        <div class="weekday-grid">
+          ${weekdays
+            .map((label) => {
+              const checked = Boolean(record?.days?.[label]);
+              const isToday = isCurrentWeek && label === todayLabel;
+              const day = dayMap[label];
+              const date = day?.date || '';
+              const md = day?.md || '';
+              const detail = date ? Store.getExerciseDayDetail(deptId, moduleId, date) : null;
+              const hasDetail = Boolean(
+                detail && (detail.minutes || detail.startTime || detail.project)
+              );
+              return `
+            <div class="exercise-day-cell ${checked ? 'is-done' : ''} ${isToday ? 'is-today' : ''} ${hasDetail ? 'has-detail' : ''}" data-weekday="${label}" data-date="${this.escapeHtml(date)}">
+              <button type="button" class="weekday-btn exercise-day-check" title="${checked ? '取消打卡' : '打卡'}">
+                <span class="weekday-label">${label}</span>
+                <span class="weekday-date">${this.escapeHtml(md)}</span>
+              </button>
+              <button type="button" class="exercise-day-more btn-exercise-day-more" title="编辑详情" aria-label="编辑运动详情">⋯</button>
+            </div>`;
+            })
+            .join('')}
+        </div>
+      </div>`;
+  },
+
+  renderExerciseSheet(deptId, moduleId, dateStr) {
+    const date = String(dateStr || '').slice(0, 10);
+    const detail = Store.getExerciseDayDetail(deptId, moduleId, date) || {};
+    const dayEntries = Store.weekDayEntries(this.getCheckinWeekKey(deptId, moduleId));
+    const day = dayEntries.find((d) => d.date === date);
+    const label = day?.label || formatDate(date);
+    const durationValue =
+      detail.minutes > 0 ? Store.formatMinutesAsDuration(detail.minutes) : '';
+    const startValue = detail.startTime || '';
+    const endValue =
+      detail.endTime && detail.endTime !== detail.startTime ? detail.endTime : '';
+    const projectValue = detail.project || '';
+    const iconSend = `<svg class="plan-sheet-svg plan-sheet-svg-send" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15.2V5.4M6.4 8.8 10 5.2l3.6 3.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+    return `
+      <div class="exercise-sheet-overlay">
+        <div class="exercise-sheet plan-sheet" data-dept="${deptId}" data-module="${moduleId}" data-date="${this.escapeHtml(date)}" role="dialog" aria-label="编辑运动详情">
+          <div class="plan-sheet-body">
+            <div class="plan-sheet-fields">
+              <div class="exercise-sheet-day">${this.escapeHtml(label)} · ${this.escapeHtml(date)}</div>
+              <label class="exercise-sheet-field">
+                <span class="exercise-sheet-label">运动项目</span>
+                <input type="text" class="exercise-sheet-project plan-sheet-input" maxlength="80" placeholder="例如：跑步 / 力量训练" value="${this.escapeHtml(projectValue)}" autocomplete="off">
+              </label>
+              <div class="plan-sheet-divider" aria-hidden="true"></div>
+              <label class="exercise-sheet-field">
+                <span class="exercise-sheet-label">运动时长</span>
+                <input type="time" class="exercise-sheet-duration" value="${this.escapeHtml(durationValue)}" aria-label="运动时长">
+              </label>
+              <div class="exercise-sheet-time-row">
+                <label class="exercise-sheet-field">
+                  <span class="exercise-sheet-label">起始时间</span>
+                  <input type="time" class="exercise-sheet-start" value="${this.escapeHtml(startValue)}" aria-label="起始时间">
+                </label>
+                <span class="exercise-sheet-time-sep" aria-hidden="true">–</span>
+                <label class="exercise-sheet-field">
+                  <span class="exercise-sheet-label">结束时间</span>
+                  <input type="time" class="exercise-sheet-end" value="${this.escapeHtml(endValue)}" aria-label="结束时间（可选）" title="不填则与起始相同">
+                </label>
+              </div>
+            </div>
+          </div>
+          <div class="plan-sheet-toolbar">
+            <div class="plan-sheet-tools">
+              <button type="button" class="plan-sheet-icon plan-moment-sheet-delete btn-exercise-sheet-clear" title="清空详情" aria-label="清空详情">清空</button>
+            </div>
+            <div class="plan-sheet-tools-right">
+              <button type="button" class="plan-sheet-send btn-exercise-sheet-save" title="保存">${iconSend}</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  },
+
+  openExerciseSheet(deptId, moduleId, dateStr) {
+    const date = String(dateStr || '').slice(0, 10);
+    if (!date) return;
+    this.exerciseSheetDate = date;
+    this.setDeptExpanded(deptId, moduleId, true);
+    this.render();
+  },
+
+  closeExerciseSheet() {
+    this.exerciseSheetDate = null;
+    this.render();
   },
 
   habitAccordionMeta(deptId, moduleId, mod) {
@@ -4735,22 +4942,44 @@ const App = {
       const done = prog.total > 0 && prog.done === prog.total;
       return { meta: `今日 ${prog.done}/${prog.total}${done ? ' · 已完成' : ''}`, today: done };
     }
+    if (mod.recordView === 'exerciseHub') {
+      const days = getCheckinDays(mod) || WEEKDAY_LABELS;
+      const weekKey = this.getCheckinWeekKey(deptId, moduleId);
+      const record = Store.getWeekCheckinRecord(deptId, moduleId, weekKey);
+      const prog = Store.getWeekdayProgress(record, days);
+      const dayEntries = Store.weekDayEntries(weekKey);
+      const detailDays = dayEntries.filter((d) => {
+        const rec = Store.getExerciseDayDetail(deptId, moduleId, d.date);
+        return Boolean(rec && (rec.minutes || rec.startTime || rec.project));
+      }).length;
+      return {
+        meta: detailDays
+          ? `本周 ${prog.done}/${prog.total} · ${detailDays} 天有详情`
+          : `本周 ${prog.done}/${prog.total}`,
+        today: Store.isWeekdayCheckedToday(deptId, moduleId),
+      };
+    }
     if (isCustomCheckinModule(mod)) {
       const days = getCheckinDays(mod);
       if (days == null) {
-        const today = Store.isDailyChecked(deptId, moduleId);
-        return { meta: today ? '今日已打卡' : '今日未打卡', today };
+        const checked = Store.isDailyChecked(deptId, moduleId);
+        return { meta: checked ? '今日已打卡' : '今日未打卡', today: checked };
       }
-      const prog = Store.getWeekdayProgress(Store.getWeekCheckinRecord(deptId, moduleId), days);
-      const todayLabel = todayWeekdayLabel();
-      const today = days.includes(todayLabel) && Store.isWeekdayCheckedToday(deptId, moduleId);
-      return { meta: `本周 ${prog.done}/${prog.total}${today ? ' · 今日已打卡' : ''}`, today };
+      const weekKey = this.getCheckinWeekKey(deptId, moduleId);
+      const record = Store.getWeekCheckinRecord(deptId, moduleId, weekKey);
+      const prog = Store.getWeekdayProgress(record, days);
+      return {
+        meta: `本周 ${prog.done}/${prog.total}${prog.done === prog.total && prog.total ? ' · 已完成' : ''}`,
+        today: Store.isWeekdayCheckedToday(deptId, moduleId),
+      };
     }
     return null;
   },
 
   renderDeptAccordion(dept, sectionId = null) {
     const expandedSet = this.getDeptExpanded(dept.id);
+    // 旧「作息」已并入「健康」
+    if (dept.id === 'living' && sectionId === 'routine') sectionId = 'fitness';
     const activeSectionId = sectionId || dept.sections?.[0]?.id || null;
     const section = activeSectionId ? getDeptSection(dept.id, activeSectionId) : null;
     const modules = section
@@ -4803,7 +5032,7 @@ const App = {
                     <span class="accordion-meta">${meta}</span>
                     <span class="accordion-chevron">›</span>`;
             return `
-              <div class="accordion-item ${expanded ? 'expanded' : ''}" data-dept="${dept.id}" data-module="${m.id}">
+              <div class="accordion-item ${expanded ? 'expanded' : ''}${m.id === 'exercise' && this.exerciseSheetDate ? ' is-exercise-sheet-open' : ''}" data-dept="${dept.id}" data-module="${m.id}">
                 <div class="accordion-header-row${livingCardUi ? ' accordion-header-row-living' : ''}">
                   <button type="button" class="accordion-header${livingCardUi ? ' accordion-header-living' : ''}" style="--accent:${dept.color}">
                     ${headerInner}
@@ -5532,6 +5761,10 @@ const App = {
 
   renderBaguPage(deptId, moduleId, mod, dept) {
     const bankId = this.route.baguBank;
+    const questionId = this.route.baguQuestion;
+    if (bankId && questionId) {
+      return this.renderBaguQuestionPage(deptId, moduleId, mod, dept, bankId, questionId);
+    }
     if (bankId) {
       return this.renderBaguBankDetail(deptId, moduleId, mod, dept, bankId);
     }
@@ -5547,40 +5780,76 @@ const App = {
   renderBaguBankGrid(deptId, moduleId, dept) {
     const records = Store.getRawRecords(deptId, moduleId);
     const notesLink = this.renderBaguNotesLink();
-    const banks = typeof listBaguBanks === 'function' ? listBaguBanks() : BAGU_QUESTION_BANKS;
+    const banksAll = typeof listBaguBanks === 'function' ? listBaguBanks() : BAGU_QUESTION_BANKS;
+    const sorting = Boolean(this.baguBankSorting);
+    const order = sorting
+      ? this.baguBankOrderDraft || Store.ensureBaguBankOrder(banksAll)
+      : Store.ensureBaguBankOrder(banksAll);
+    const byId = new Map(banksAll.map((b) => [b.id, b]));
+    const banks = order.map((id) => byId.get(id)).filter(Boolean);
+    const draftDirty =
+      sorting &&
+      Array.isArray(this.baguBankOrderDraft) &&
+      JSON.stringify(this.baguBankOrderDraft) !== JSON.stringify(Store.ensureBaguBankOrder(banksAll));
 
     return `
       ${this.renderModuleTabs(dept, moduleId)}
-      <div class="module-page module-page-bagu">
+      <div class="module-page module-page-bagu ${sorting ? 'is-bank-sorting' : ''}">
         <div class="bagu-bank-toolbar">
           ${notesLink || ''}
-          <button type="button" class="btn btn-primary btn-sm btn-create-bagu-bank">+ 创建题库</button>
+          ${
+            sorting
+              ? `<button type="button" class="btn btn-ghost btn-sm btn-bagu-bank-sort-toggle is-active">取消</button>
+                 <button type="button" class="btn btn-secondary btn-sm" id="btnSaveBaguBankOrder">保存顺序</button>`
+              : `<div class="bagu-bank-more-wrap" id="baguBankMoreWrap">
+                  <button type="button" class="btn btn-ghost btn-sm btn-bagu-bank-more" id="btnBaguBankMore" title="更多" aria-haspopup="true" aria-expanded="false">⋯</button>
+                  <div class="bagu-bank-more-menu hidden" id="baguBankMoreMenu" role="menu">
+                    <button type="button" class="bagu-bank-more-option btn-create-bagu-bank" role="menuitem">创建题库</button>
+                    <button type="button" class="bagu-bank-more-option" id="btnBaguBankSortFromMenu" role="menuitem">调整顺序</button>
+                    <button type="button" class="bagu-bank-more-option" id="btnBaguCatFromMenu" role="menuitem">
+                      <img class="bagu-bank-more-cat" src="/images/bagu-cat.png" alt="">八股猫
+                    </button>
+                  </div>
+                </div>`
+          }
         </div>
+        ${sorting ? `<p class="handwrite-sort-hint${draftDirty ? ' is-dirty' : ''}">使用 ↑↓ 调整题库顺序，完成后点「保存顺序」</p>` : ''}
         <div class="bagu-bank-grid">
           ${banks
-            .map((bank) => {
+            .map((bank, index) => {
               const list = records.filter((r) => r.bank === bank.id);
               const doneCount = list.filter((r) => r.done).length;
+              const reorder = sorting
+                ? `<div class="bagu-bank-reorder">
+                    <button type="button" class="icon-btn btn-bagu-bank-up" data-bank="${this.escapeHtml(bank.id)}" title="上移" ${index === 0 ? 'disabled' : ''}>↑</button>
+                    <button type="button" class="icon-btn btn-bagu-bank-down" data-bank="${this.escapeHtml(bank.id)}" title="下移" ${index === banks.length - 1 ? 'disabled' : ''}>↓</button>
+                  </div>`
+                : '';
               return `
-              <button type="button" class="bagu-bank-card" data-bank="${this.escapeHtml(bank.id)}">
+              <div class="bagu-bank-card ${sorting ? 'is-sorting' : ''}" data-bank="${this.escapeHtml(bank.id)}" ${sorting ? '' : 'role="button" tabindex="0"'}>
                 <span class="bagu-bank-progress" title="已完成 ${doneCount}/${list.length}">
                   <span class="bagu-bank-progress-text">已完成<br>${doneCount}/${list.length}</span>
                 </span>
+                ${reorder}
                 ${this.renderBaguBankIcon(bank)}
                 <div class="bagu-bank-body">
                   <h4 class="bagu-bank-title">${this.escapeHtml(bank.name)} 面试题</h4>
                   <p class="bagu-bank-desc">${this.escapeHtml(bank.desc || '暂无介绍')}</p>
                 </div>
-              </button>`;
+              </div>`;
             })
             .join('')}
-          <button type="button" class="bagu-bank-card bagu-bank-card-create btn-create-bagu-bank">
+          ${
+            sorting
+              ? ''
+              : `<button type="button" class="bagu-bank-card bagu-bank-card-create btn-create-bagu-bank">
             <span class="bagu-bank-icon bagu-bank-icon-fallback" aria-hidden="true">+</span>
             <div class="bagu-bank-body">
               <h4 class="bagu-bank-title">创建题库</h4>
               <p class="bagu-bank-desc">自定义标题、Logo 与介绍</p>
             </div>
-          </button>
+          </button>`
+          }
         </div>
       </div>`;
   },
@@ -5634,7 +5903,10 @@ const App = {
                 ? `<button type="button" class="btn btn-ghost btn-sm btn-edit-bagu-bank" data-bank="${this.escapeHtml(bankId)}" title="编辑题库">编辑题库</button>`
                 : ''
             }
-            <button type="button" class="btn btn-ghost btn-sm btn-bagu-smart-sort" title="按难度与学习曲线自动分类排序">智能排序</button>
+            <button type="button" class="bagu-cat-avatar-btn" id="btnBaguCat" title="八股猫：帮你整理题库" aria-label="打开八股猫">
+              <img class="bagu-cat-avatar" src="/images/bagu-cat.png" alt="">
+              <span class="bagu-cat-avatar-label">八股猫</span>
+            </button>
             <button type="button" class="btn btn-ghost btn-sm btn-bagu-sort-toggle ${sortEditing ? 'is-active' : ''}" title="${sortEditing ? '取消调整' : '调整顺序'}">${sortEditing ? '取消' : '⇅ 顺序'}</button>
             ${sortEditing ? '<button type="button" class="btn btn-secondary btn-sm" id="btnSaveBaguSort">保存顺序</button>' : ''}
             <button type="button" class="btn btn-primary btn-sm" id="btnAddBaguQuestion">+ 添加题目</button>
@@ -5658,8 +5930,12 @@ const App = {
     return `
       <section class="lc-group bagu-group ${collapsed ? 'is-collapsed' : ''}" data-category="${this.escapeHtml(category)}">
         <header class="lc-group-header bagu-group-header">
-          <button type="button" class="bagu-group-toggle" data-bank="${this.escapeHtml(bankId)}" data-category="${this.escapeHtml(category)}" title="${collapsed ? '展开' : '折叠'}">
-            <span class="bagu-group-chevron">${collapsed ? '›' : '⌄'}</span>
+          <button type="button" class="bagu-group-toggle" data-bank="${this.escapeHtml(bankId)}" data-category="${this.escapeHtml(category)}" title="${collapsed ? '展开' : '折叠'}" aria-expanded="${collapsed ? 'false' : 'true'}">
+            <span class="bagu-group-chevron" aria-hidden="true">
+              <svg viewBox="0 0 12 12" width="12" height="12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M2.5 7.5L6 4l3.5 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </span>
             <span class="lc-group-title">${this.escapeHtml(category)}</span>
             <span class="bagu-group-count">${doneCount}/${records.length}</span>
           </button>
@@ -5681,17 +5957,101 @@ const App = {
     const diff = record.difficulty || '';
     const diffClass =
       diff === '简单' ? 'lc-diff-easy' : diff === '困难' ? 'lc-diff-hard' : diff === '中等' ? 'lc-diff-medium' : '';
+    const tagList = this.parseBaguTags(record.tags);
+    const tagsHtml = `<div class="bagu-question-col bagu-question-col-tags">${
+      tagList.length
+        ? `<span class="bagu-question-tags">${tagList
+            .map((tag) => `<span class="bagu-question-tag">${this.escapeHtml(tag)}</span>`)
+            .join('')}</span>`
+        : ''
+    }</div>`;
 
     return `
-      <div class="bagu-question-row ${record.done ? 'is-done' : ''}" data-dept="${deptId}" data-module="${moduleId}" data-id="${record.id}">
+      <div class="bagu-question-row ${record.done ? 'is-done' : ''} ${sortEditing ? 'is-sort-editing' : 'is-clickable'}" data-dept="${deptId}" data-module="${moduleId}" data-id="${record.id}" ${sortEditing ? '' : 'role="link" tabindex="0"'}>
         <button type="button" class="lc-check bagu-check ${record.done ? 'is-done' : ''}" title="${record.done ? '标记未完成' : '标记完成'}">
           ${record.done ? '✓' : ''}
         </button>
         <div class="bagu-question-main">
           <span class="bagu-question-title">${this.escapeHtml(record.title || '未命名题目')}</span>
         </div>
-        ${diff ? `<span class="lc-diff ${diffClass}">${this.escapeHtml(diff)}</span>` : ''}
-        ${sortEditing ? reorderBtns : '<button type="button" class="btn btn-ghost btn-sm btn-view-bagu-answer">查看答案</button>'}
+        <div class="bagu-question-col bagu-question-col-meta">
+          ${diff ? `<span class="lc-diff ${diffClass}">${this.escapeHtml(diff)}</span>` : ''}
+          ${this.renderBaguFrequency(record.frequency, true)}
+        </div>
+        ${tagsHtml}
+        ${sortEditing ? reorderBtns : ''}
+      </div>`;
+  },
+
+  renderBaguFrequency(frequency, forceShow = false) {
+    let freq = String(frequency || '').trim();
+    if (!['高频', '中频', '低频'].includes(freq)) {
+      if (!forceShow) return '';
+      freq = '中频';
+    }
+    const cls =
+      freq === '高频' ? 'bagu-freq-high' : freq === '低频' ? 'bagu-freq-low' : 'bagu-freq-mid';
+    return `<span class="bagu-freq ${cls}" title="面试频率：${this.escapeHtml(freq)}">${this.escapeHtml(freq)}</span>`;
+  },
+
+  renderBaguQuestionPage(deptId, moduleId, mod, dept, bankId, questionId) {
+    const bank = getBaguBank(bankId);
+    const record = Store.getRecord(deptId, moduleId, questionId);
+    if (!record || record.bank !== bankId) {
+      return `
+        ${this.renderModuleTabs(dept, moduleId)}
+        <div class="module-page module-page-bagu">
+          <button type="button" class="back-link btn-bagu-question-back" data-dept="${deptId}" data-module="${moduleId}" data-bank="${this.escapeHtml(bankId)}">← 返回题库</button>
+          <div class="empty-state">题目不存在或已删除</div>
+        </div>`;
+    }
+
+    const tagList = this.parseBaguTags(record.tags);
+    const keypointList = this.parseBaguTags(record.keypoints);
+    const diff = record.difficulty || '';
+    const diffClass =
+      diff === '简单' ? 'lc-diff-easy' : diff === '困难' ? 'lc-diff-hard' : diff === '中等' ? 'lc-diff-medium' : '';
+    const metaHtml = [
+      `<span class="bagu-question-col-meta">${
+        diff ? `<span class="lc-diff ${diffClass}">${this.escapeHtml(diff)}</span>` : ''
+      }${this.renderBaguFrequency(record.frequency, true)}</span>`,
+      ...tagList.map((tag) => `<span class="bagu-question-tag">${this.escapeHtml(tag)}</span>`),
+      ...keypointList.map((point) => `<span class="bagu-question-keypoint">${this.escapeHtml(point)}</span>`),
+    ]
+      .filter(Boolean)
+      .join('');
+
+    const sections = this.getBaguAnswerSections(record);
+    const bodyHtml = sections.some((s) => s.html)
+      ? sections
+          .map(
+            (s) => `
+        <section class="bagu-answer-section">
+          <h4 class="bagu-answer-section-title">${s.title}</h4>
+          ${
+            s.html
+              ? `<div class="bagu-answer-view ql-editor">${s.html}</div>`
+              : '<p class="bagu-answer-empty">暂无内容</p>'
+          }
+        </section>`
+          )
+          .join('')
+      : '<div class="empty-state empty-inline">暂无答案，可点「编辑」补充</div>';
+
+    return `
+      ${this.renderModuleTabs(dept, moduleId)}
+      <div class="module-page module-page-bagu module-page-bagu-question">
+        <button type="button" class="back-link btn-bagu-question-back" data-dept="${deptId}" data-module="${moduleId}" data-bank="${this.escapeHtml(bankId)}">← 返回${bank ? ` ${this.escapeHtml(bank.name)}` : '题库'}</button>
+        <header class="bagu-question-page-head">
+          <div class="bagu-question-page-head-main">
+            <h3 class="bagu-question-page-title">${this.escapeHtml(record.title || '未命名题目')}</h3>
+            ${metaHtml ? `<div class="bagu-question-page-meta">${metaHtml}</div>` : ''}
+          </div>
+          <div class="bagu-question-page-actions">
+            <button type="button" class="btn btn-ghost btn-sm btn-edit-bagu-question" data-id="${record.id}">编辑</button>
+          </div>
+        </header>
+        <div class="bagu-answer-sections bagu-question-page-body">${bodyHtml}</div>
       </div>`;
   },
 
@@ -5709,12 +6069,14 @@ const App = {
     document.getElementById('modalTitle').textContent = record.title || '题目';
     const form = document.getElementById('recordForm');
     const tagList = this.parseBaguTags(record.tags);
+    const keypointList = this.parseBaguTags(record.keypoints);
     const metaHtml =
-      record.category || record.difficulty || tagList.length
+      record.category || record.difficulty || tagList.length || keypointList.length
         ? `<div class="bagu-answer-meta">
             ${record.category ? `<span class="bagu-question-category">${this.escapeHtml(record.category)}</span>` : ''}
             ${record.difficulty ? `<span class="bagu-question-tag">${this.escapeHtml(record.difficulty)}</span>` : ''}
             ${tagList.map((tag) => `<span class="bagu-question-tag">${this.escapeHtml(tag)}</span>`).join('')}
+            ${keypointList.map((point) => `<span class="bagu-question-keypoint">${this.escapeHtml(point)}</span>`).join('')}
           </div>`
         : '';
 
@@ -5737,6 +6099,9 @@ const App = {
 
     form.innerHTML = `${metaHtml}<div class="bagu-answer-sections">${bodyHtml}</div>`;
     form.onsubmit = null;
+    form.querySelectorAll('.bagu-answer-view.ql-editor').forEach((el) => {
+      RichEditor.applyListStartStyles(el);
+    });
 
     document.getElementById('modal')?.classList.add('modal-rich');
     document.getElementById('modalSave')?.classList.add('hidden');
@@ -5776,11 +6141,103 @@ const App = {
   bindBaguPage(deptId, moduleId) {
     const bankId = this.route.baguBank;
 
-    document.querySelectorAll('.bagu-bank-card[data-bank]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        this.navigate('module', { deptId, moduleId, baguBank: btn.dataset.bank });
+    document.querySelectorAll('.bagu-bank-card[data-bank]').forEach((card) => {
+      const openBank = () => {
+        if (this.baguBankSorting) return;
+        this.navigate('module', { deptId, moduleId, baguBank: card.dataset.bank });
+      };
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('.bagu-bank-reorder')) return;
+        openBank();
+      });
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openBank();
+        }
       });
     });
+
+    document.querySelector('.btn-bagu-bank-sort-toggle')?.addEventListener('click', () => {
+      if (this.baguBankSorting) {
+        if (
+          this.baguBankOrderDraft &&
+          JSON.stringify(this.baguBankOrderDraft) !==
+            JSON.stringify(Store.ensureBaguBankOrder(listBaguBanks())) &&
+          !confirm('有未保存的顺序修改，确定取消吗？')
+        ) {
+          return;
+        }
+        this.baguBankSorting = false;
+        this.baguBankOrderDraft = null;
+      } else {
+        this.baguBankSorting = true;
+        this.baguBankOrderDraft = Store.ensureBaguBankOrder(listBaguBanks());
+      }
+      this.render();
+    });
+
+    document.getElementById('btnBaguBankMore')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const menu = document.getElementById('baguBankMoreMenu');
+      const btn = document.getElementById('btnBaguBankMore');
+      const willOpen = menu?.classList.contains('hidden');
+      menu?.classList.toggle('hidden', !willOpen);
+      btn?.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    });
+
+    document.getElementById('btnBaguBankSortFromMenu')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.getElementById('baguBankMoreMenu')?.classList.add('hidden');
+      this.baguBankSorting = true;
+      this.baguBankOrderDraft = Store.ensureBaguBankOrder(listBaguBanks());
+      this.render();
+    });
+
+    document.getElementById('btnBaguCatFromMenu')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.getElementById('baguBankMoreMenu')?.classList.add('hidden');
+      this.openBaguCatBankPicker(deptId, moduleId);
+    });
+
+    document.getElementById('btnSaveBaguBankOrder')?.addEventListener('click', async () => {
+      if (!Array.isArray(this.baguBankOrderDraft)) return;
+      Store.setBaguBankOrder(this.baguBankOrderDraft);
+      this.baguBankSorting = false;
+      this.baguBankOrderDraft = null;
+      try {
+        await Store.flushSave();
+      } catch {
+        /* local ok */
+      }
+      this.render();
+    });
+
+    document.querySelectorAll('.btn-bagu-bank-up').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.moveBaguBankDraft(btn.dataset.bank, -1);
+        this.render();
+      });
+    });
+
+    document.querySelectorAll('.btn-bagu-bank-down').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.moveBaguBankDraft(btn.dataset.bank, 1);
+        this.render();
+      });
+    });
+
+    if (!this.baguBankMoreMenuBound) {
+      this.baguBankMoreMenuBound = true;
+      document.addEventListener('click', () => {
+        document.getElementById('baguBankMoreMenu')?.classList.add('hidden');
+        document.getElementById('btnBaguBankMore')?.setAttribute('aria-expanded', 'false');
+      });
+    }
 
     document.querySelectorAll('.btn-create-bagu-bank').forEach((btn) => {
       btn.addEventListener('click', (e) => {
@@ -5812,13 +6269,32 @@ const App = {
       this.navigate('module', { deptId, moduleId });
     });
 
+    document.querySelector('.btn-bagu-question-back')?.addEventListener('click', () => {
+      const btn = document.querySelector('.btn-bagu-question-back');
+      this.navigate('module', {
+        deptId,
+        moduleId,
+        baguBank: btn?.dataset.bank || bankId,
+      });
+    });
+
+    document.querySelector('.btn-edit-bagu-question')?.addEventListener('click', () => {
+      const id = document.querySelector('.btn-edit-bagu-question')?.dataset.id;
+      const record = id ? Store.getRecord(deptId, moduleId, id) : null;
+      if (record) this.openModal(deptId, moduleId, this.normalizeBaguEditRecord(record));
+    });
+
+    document.querySelectorAll('.bagu-answer-view.ql-editor').forEach((el) => {
+      RichEditor.applyListStartStyles(el);
+    });
+
     document.getElementById('btnAddBaguQuestion')?.addEventListener('click', () => {
       this.openModal(deptId, moduleId);
     });
 
-    document.querySelector('.btn-bagu-smart-sort')?.addEventListener('click', () => {
+    document.getElementById('btnBaguCat')?.addEventListener('click', () => {
       if (!bankId) return;
-      this.runBaguSmartSort(deptId, moduleId, bankId);
+      this.openBaguCatPanel(deptId, moduleId, bankId);
     });
 
     document.querySelector('.btn-bagu-sort-toggle')?.addEventListener('click', () => {
@@ -5893,13 +6369,37 @@ const App = {
       });
     });
 
-    document.querySelectorAll('.btn-view-bagu-answer').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const row = btn.closest('.bagu-question-row');
-        const record = Store.getRecord(row.dataset.dept, row.dataset.module, row.dataset.id);
-        if (record) this.openBaguAnswerModal(row.dataset.dept, row.dataset.module, record);
+    document.querySelectorAll('.bagu-question-row.is-clickable').forEach((row) => {
+      const openQuestion = () => {
+        if (!bankId) return;
+        this.navigate('module', {
+          deptId: row.dataset.dept,
+          moduleId: row.dataset.module,
+          baguBank: bankId,
+          baguQuestion: row.dataset.id,
+        });
+      };
+      row.addEventListener('click', openQuestion);
+      row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openQuestion();
+        }
       });
     });
+  },
+
+  moveBaguBankDraft(bankId, delta) {
+    if (!Array.isArray(this.baguBankOrderDraft)) {
+      this.baguBankOrderDraft = Store.ensureBaguBankOrder(listBaguBanks());
+    }
+    const order = [...this.baguBankOrderDraft];
+    const idx = order.indexOf(bankId);
+    if (idx < 0) return;
+    const next = idx + delta;
+    if (next < 0 || next >= order.length) return;
+    [order[idx], order[next]] = [order[next], order[idx]];
+    this.baguBankOrderDraft = order;
   },
 
   deleteBaguBankWithConfirm(bankId) {
@@ -6005,7 +6505,7 @@ const App = {
       e.target.value = '';
       if (!file) return;
       try {
-        this.baguBankDraft.iconSrc = await this.compressAvatar(file);
+        this.baguBankDraft.iconSrc = await this.compressBaguBankLogo(file);
         syncLogoPreview();
       } catch (err) {
         alert(err.message || '图片处理失败');
@@ -7900,6 +8400,7 @@ const App = {
   bindProjectPage(deptId, moduleId) {
     const records = Store.getSortedRecords(deptId, moduleId);
     this.mountProjectEditors(records);
+    document.querySelectorAll('.ql-editor').forEach((el) => RichEditor.applyListStartStyles(el));
     this.bindProjectRelatedBagu(deptId, moduleId);
     this.bindProjectBodyComments();
     this.bindProjectCollapses();
@@ -9847,6 +10348,100 @@ const App = {
     this.bindHabitChecklist();
     this.bindWeekdayCheckin();
     this.bindDailyCheckin();
+    this.bindExerciseHub();
+  },
+
+  bindExerciseHub() {
+    document.querySelectorAll('.exercise-hub-week-head').forEach((head) => {
+      const deptId = head.dataset.dept;
+      const moduleId = head.dataset.module;
+      head.querySelector('.btn-checkin-week-prev')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.exerciseSheetDate = null;
+        this.shiftCheckinWeek(deptId, moduleId, -1);
+        this.render();
+      });
+      head.querySelector('.btn-checkin-week-next')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.exerciseSheetDate = null;
+        this.shiftCheckinWeek(deptId, moduleId, 1);
+        this.render();
+      });
+      head.querySelector('.checkin-week-date-input')?.addEventListener('click', (e) => e.stopPropagation());
+      head.querySelector('.checkin-week-date-input')?.addEventListener('change', (e) => {
+        e.stopPropagation();
+        const value = e.target.value;
+        if (!value) return;
+        this.exerciseSheetDate = null;
+        this.setCheckinWeekByDate(deptId, moduleId, value);
+        this.render();
+      });
+    });
+
+    document.querySelectorAll('.btn-exercise-day-more').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const cell = btn.closest('.exercise-day-cell');
+        const hub = btn.closest('.exercise-hub');
+        const date = cell?.dataset.date;
+        const deptId = hub?.dataset.dept;
+        const moduleId = hub?.dataset.module;
+        if (!date || !deptId || !moduleId) return;
+        this.openExerciseSheet(deptId, moduleId, date);
+      });
+    });
+
+    document.querySelectorAll('.exercise-sheet-overlay').forEach((overlay) => {
+      const sheet = overlay.querySelector('.exercise-sheet');
+      if (!sheet) return;
+      const deptId = sheet.dataset.dept;
+      const moduleId = sheet.dataset.module;
+      const date = sheet.dataset.date;
+
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) this.closeExerciseSheet();
+      });
+      sheet.addEventListener('click', (e) => e.stopPropagation());
+
+      const save = () => {
+        const duration = sheet.querySelector('.exercise-sheet-duration')?.value || '';
+        const startTime = sheet.querySelector('.exercise-sheet-start')?.value || '';
+        const endTime = sheet.querySelector('.exercise-sheet-end')?.value || '';
+        const project = sheet.querySelector('.exercise-sheet-project')?.value || '';
+        Store.setExerciseDayDetail(deptId, moduleId, date, {
+          duration,
+          startTime,
+          endTime,
+          project,
+        });
+        this.closeExerciseSheet();
+      };
+
+      sheet.querySelector('.btn-exercise-sheet-save')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        save();
+      });
+      sheet.querySelector('.btn-exercise-sheet-clear')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        Store.setExerciseDayDetail(deptId, moduleId, date, {
+          minutes: 0,
+          startTime: '',
+          endTime: '',
+          project: '',
+        });
+        this.closeExerciseSheet();
+      });
+      sheet.querySelector('.exercise-sheet-project')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          save();
+        }
+      });
+      requestAnimationFrame(() => {
+        sheet.querySelector('.exercise-sheet-project')?.focus();
+        sheet.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
+    });
   },
 
   bindHabitChecklist() {
@@ -9898,7 +10493,7 @@ const App = {
       panel.querySelectorAll('.weekday-btn').forEach((btn) => {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
-          const day = btn.dataset.weekday;
+          const day = btn.dataset.weekday || btn.closest('.exercise-day-cell')?.dataset.weekday;
           if (!day) return;
           Store.toggleWeekdayCheck(deptId, moduleId, day, days, weekKey);
           this.render();
@@ -10015,7 +10610,19 @@ const App = {
     const fillField = (name, value) => {
       const el = form?.elements?.[name];
       if (!el || value === null || value === undefined || value === '') return;
-      el.value = value;
+      const str = String(value);
+      if (el.tagName === 'SELECT') {
+        const exists = [...el.options].some((o) => o.value === str);
+        if (!exists) {
+          const opt = document.createElement('option');
+          opt.value = str;
+          opt.textContent = str;
+          el.appendChild(opt);
+        }
+        el.value = str;
+        return;
+      }
+      el.value = str;
     };
 
     const runClassify = async () => {
@@ -10031,7 +10638,7 @@ const App = {
 
       btn.disabled = true;
       input.disabled = true;
-      setHint('正在识别分类与难度…');
+      setHint('正在用大模型识别分类、标签、考点、难度、频率…');
       try {
         const res = await fetch('/api/bagu/classify', {
           method: 'POST',
@@ -10049,11 +10656,19 @@ const App = {
 
         fillField('category', data.category);
         fillField('difficulty', data.difficulty);
+        fillField('frequency', data.frequency);
         fillField('tags', data.tags);
+        fillField('keypoints', data.keypoints);
         fillField('learnOrder', data.learnOrder);
 
-        const src = data.source === 'llm' ? 'LLM' : '规则引擎';
-        setHint(`识别成功（${src}）· ${data.category || '未分类'} · ${data.difficulty || '中等'} · 学习序 ${data.learnOrder}`, 'is-ok');
+        const src = data.source === 'llm' ? 'LLM' : '规则引擎（未配置或 LLM 失败）';
+        const tagText = data.tags ? ` · ${data.tags}` : '';
+        const pointText = data.keypoints ? ` · 考点 ${data.keypoints}` : '';
+        const freqText = data.frequency ? ` · ${data.frequency}` : '';
+        setHint(
+          `识别成功（${src}）· ${data.category || '未分类'} · ${data.difficulty || '中等'}${freqText}${tagText}${pointText}`,
+          'is-ok'
+        );
       } catch (err) {
         setHint(err.message || '识别失败，请稍后重试', 'is-error');
       } finally {
@@ -10071,55 +10686,530 @@ const App = {
     });
   },
 
-  async runBaguSmartSort(deptId, moduleId, bankId) {
-    const bank = getBaguBank(bankId);
-    const records = Store.getRawRecords(deptId, moduleId).filter((r) => r.bank === bankId);
-    if (!records.length) {
-      alert('当前题库还没有题目');
+  getBaguCatMessages(bankId) {
+    return Store.getBaguCatMessages(bankId);
+  },
+
+  openBaguCatBankPicker(deptId, moduleId) {
+    const banks = typeof listBaguBanks === 'function' ? listBaguBanks() : [];
+    if (!banks.length) {
+      alert('还没有题库，请先创建题库');
       return;
     }
-    if (!confirm(`将对「${bank?.name || bankId}」共 ${records.length} 道题自动分类，并按难度/学习曲线重排。是否继续？`)) {
+    if (banks.length === 1) {
+      this.openBaguCatPanel(deptId, moduleId, banks[0].id);
       return;
     }
 
-    const btn = document.querySelector('.btn-bagu-smart-sort');
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = '排序中…';
-    }
-
-    try {
-      const res = await fetch('/api/bagu/smart-sort', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          bankId,
-          bankName: bank?.name || '',
-          categories: bank?.categories || [],
-          questions: records.map((r) => ({ id: r.id, title: r.title || '' })),
-        }),
+    this.baguCatOpen = { deptId, moduleId, bankId: null, picking: true };
+    const overlay = document.getElementById('baguCatOverlay');
+    const title = document.getElementById('baguCatTitle');
+    const sub = document.getElementById('baguCatSub');
+    const box = document.getElementById('baguCatMessages');
+    const inputArea = document.querySelector('.bagu-cat-input-area');
+    if (title) title.textContent = '八股猫';
+    if (sub) sub.textContent = '先选一个题库';
+    if (box) {
+      box.innerHTML = `
+        <div class="bagu-cat-msg is-assistant">
+          <span class="bagu-cat-msg-avatar" aria-hidden="true"><img src="/images/bagu-cat.png" alt=""></span>
+          <div class="bagu-cat-msg-bubble">喵～要整理哪个题库？点下面选一个～</div>
+        </div>
+        <div class="bagu-cat-bank-picker">
+          ${banks
+            .map(
+              (b) =>
+                `<button type="button" class="btn btn-ghost btn-sm bagu-cat-pick-bank" data-bank="${this.escapeHtml(b.id)}">${this.escapeHtml(b.name)}</button>`
+            )
+            .join('')}
+        </div>`;
+      box.querySelectorAll('.bagu-cat-pick-bank').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          this.openBaguCatPanel(deptId, moduleId, btn.dataset.bank);
+        });
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || '智能排序失败');
+    }
+    if (inputArea) inputArea.classList.add('hidden');
+    overlay?.classList.remove('hidden');
+  },
 
-      Store.applyBaguSmartOrder(deptId, moduleId, bankId, data.items || []);
-      this.baguDraft = null;
-      this.baguEditing = null;
+  openBaguCatPanel(deptId, moduleId, bankId) {
+    this.baguCatOpen = { deptId, moduleId, bankId };
+    this.baguCatPending = Store.getBaguCatPending(bankId);
+    const bank = getBaguBank(bankId);
+    const overlay = document.getElementById('baguCatOverlay');
+    const title = document.getElementById('baguCatTitle');
+    const sub = document.getElementById('baguCatSub');
+    const inputArea = document.querySelector('.bagu-cat-input-area');
+    if (title) title.textContent = '八股猫';
+    if (sub) sub.textContent = bank?.name ? `正在看 · ${bank.name}` : '题库助手';
+    inputArea?.classList.remove('hidden');
+    this.renderBaguCatMessages();
+    overlay?.classList.remove('hidden');
+    requestAnimationFrame(() => document.getElementById('baguCatInput')?.focus());
+  },
+
+  closeBaguCatPanel() {
+    if (this.baguCatOpen?.bankId) {
+      Store.setBaguCatPending(this.baguCatOpen.bankId, this.baguCatPending);
+    }
+    this.baguCatOpen = null;
+    document.querySelector('.bagu-cat-input-area')?.classList.remove('hidden');
+    document.getElementById('baguCatOverlay')?.classList.add('hidden');
+  },
+
+  renderBaguCatMessages() {
+    const box = document.getElementById('baguCatMessages');
+    if (!box || !this.baguCatOpen) return;
+    const messages = this.getBaguCatMessages(this.baguCatOpen.bankId);
+    box.innerHTML = messages
+      .map((m) => {
+        const isUser = m.role === 'user';
+        return `<div class="bagu-cat-msg ${isUser ? 'is-user' : 'is-assistant'}">
+          ${isUser ? '' : '<span class="bagu-cat-msg-avatar" aria-hidden="true"><img src="/images/bagu-cat.png" alt=""></span>'}
+          <div class="bagu-cat-msg-bubble">${this.formatChatContent(m.content)}</div>
+        </div>`;
+      })
+      .join('');
+    box.scrollTop = box.scrollHeight;
+  },
+
+  showBaguCatTyping() {
+    const box = document.getElementById('baguCatMessages');
+    if (!box || document.getElementById('baguCatTyping')) return;
+    box.insertAdjacentHTML(
+      'beforeend',
+      `<div class="bagu-cat-msg is-assistant" id="baguCatTyping">
+        <span class="bagu-cat-msg-avatar" aria-hidden="true"><img src="/images/bagu-cat.png" alt=""></span>
+        <div class="bagu-cat-msg-bubble bagu-cat-typing"><span></span><span></span><span></span></div>
+      </div>`
+    );
+    box.scrollTop = box.scrollHeight;
+  },
+
+  hideBaguCatTyping() {
+    document.getElementById('baguCatTyping')?.remove();
+  },
+
+  baguRichEmpty(html) {
+    const text = String(html || '')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .trim();
+    return !text;
+  },
+
+  buildBaguCatQuestionPayload(deptId, moduleId, bankId) {
+    return Store.getRawRecords(deptId, moduleId)
+      .filter((r) => r.bank === bankId)
+      .map((r) => ({
+        id: r.id,
+        title: r.title || '',
+        category: Store._baguCategoryKey(r),
+        difficulty: r.difficulty || '',
+        frequency: r.frequency || '',
+        tags: r.tags || '',
+        keypoints: r.keypoints || '',
+        hasApproach: !this.baguRichEmpty(r.approach),
+        hasAnswer: !this.baguRichEmpty(r.answer || r.note),
+        hasFollowUp: !this.baguRichEmpty(r.followUp),
+      }));
+  },
+
+  async applyBaguCatActions(deptId, moduleId, bankId, actions) {
+    let changed = false;
+    for (const action of actions || []) {
+      if (!action?.type) continue;
+
+      if (action.type === 'smart_sort' && Array.isArray(action.items)) {
+        Store.applyBaguSmartOrder(deptId, moduleId, bankId, action.items);
+        this.baguDraft = null;
+        this.baguEditing = null;
+        changed = true;
+        continue;
+      }
+
+      if (action.type === 'update_bank') {
+        const targetBankId = action.bankId || bankId;
+        const patch = {};
+        if (action.desc != null) patch.desc = action.desc;
+        if (action.name != null) patch.name = action.name;
+        if (Object.keys(patch).length && targetBankId) {
+          const ok = Store.updateBaguBankMeta(targetBankId, patch);
+          if (ok) {
+            changed = true;
+            this.patchBaguBankDescInDom(targetBankId, patch.desc);
+          }
+        }
+        continue;
+      }
+
+      if (action.type === 'update_meta' && Array.isArray(action.items)) {
+        action.items.forEach((it) => {
+          const patch = {};
+          if (it.category != null) patch.category = it.category;
+          if (it.difficulty != null) patch.difficulty = it.difficulty;
+          if (it.frequency != null) patch.frequency = it.frequency;
+          if (it.tags != null) patch.tags = it.tags;
+          if (it.keypoints != null) patch.keypoints = it.keypoints;
+          if (it.title != null) patch.title = it.title;
+          if (Object.keys(patch).length) Store.updateRecord(deptId, moduleId, it.id, patch);
+        });
+        changed = true;
+        continue;
+      }
+
+      if (action.type === 'set_category' && action.category && Array.isArray(action.questionIds)) {
+        action.questionIds.forEach((id) => {
+          Store.updateRecord(deptId, moduleId, id, { category: action.category });
+        });
+        changed = true;
+        continue;
+      }
+
+      if (action.type === 'set_difficulty' && action.difficulty && Array.isArray(action.questionIds)) {
+        action.questionIds.forEach((id) => {
+          Store.updateRecord(deptId, moduleId, id, { difficulty: action.difficulty });
+        });
+        changed = true;
+        continue;
+      }
+
+      if (action.type === 'set_frequency' && action.frequency && Array.isArray(action.questionIds)) {
+        action.questionIds.forEach((id) => {
+          Store.updateRecord(deptId, moduleId, id, { frequency: action.frequency });
+        });
+        changed = true;
+        continue;
+      }
+
+      if (action.type === 'estimate_frequency' && Array.isArray(action.items)) {
+        action.items.forEach((it) => {
+          if (it?.id && it.frequency) {
+            Store.updateRecord(deptId, moduleId, it.id, { frequency: it.frequency });
+          }
+        });
+        changed = true;
+        continue;
+      }
+
+      if (action.type === 'set_tags' && action.tags != null && Array.isArray(action.questionIds)) {
+        action.questionIds.forEach((id) => {
+          Store.updateRecord(deptId, moduleId, id, { tags: action.tags });
+        });
+        changed = true;
+        continue;
+      }
+
+      if (action.type === 'set_keypoints' && action.keypoints != null && Array.isArray(action.questionIds)) {
+        action.questionIds.forEach((id) => {
+          Store.updateRecord(deptId, moduleId, id, { keypoints: action.keypoints });
+        });
+        changed = true;
+        continue;
+      }
+
+      if (action.type === 'set_title' && action.title && Array.isArray(action.questionIds)) {
+        action.questionIds.forEach((id) => {
+          Store.updateRecord(deptId, moduleId, id, { title: action.title });
+        });
+        changed = true;
+        continue;
+      }
+
+      if (action.type === 'reorder') {
+        const categoryOrder = Array.isArray(action.categoryOrder) ? action.categoryOrder : [];
+        const questionOrder =
+          action.questionOrder && typeof action.questionOrder === 'object' ? action.questionOrder : {};
+        Store.setBaguSort(deptId, moduleId, bankId, {
+          mode: 'custom',
+          categoryOrder,
+          questionOrder,
+        });
+        this.baguDraft = null;
+        this.baguEditing = null;
+        changed = true;
+        continue;
+      }
+
+      if (action.type === 'generate_content' && Array.isArray(action.items)) {
+        action.items.forEach((it) => {
+          const patch = {};
+          if (it.approach != null) patch.approach = it.approach;
+          if (it.answer != null) patch.answer = it.answer;
+          if (it.followUp != null) patch.followUp = it.followUp;
+          if (Object.keys(patch).length) Store.updateRecord(deptId, moduleId, it.id, patch);
+        });
+        changed = true;
+        continue;
+      }
+
+      if (action.type === 'merge_categories' && action.to && Array.isArray(action.from)) {
+        if (Store.mergeBaguCategories(deptId, moduleId, bankId, action.from, action.to)) {
+          this.baguDraft = null;
+          this.baguEditing = null;
+          changed = true;
+        }
+        continue;
+      }
+
+      if (action.type === 'split_category' && action.from && Array.isArray(action.splits)) {
+        if (Store.splitBaguCategory(deptId, moduleId, bankId, action.from, action.splits)) {
+          this.baguDraft = null;
+          this.baguEditing = null;
+          changed = true;
+        }
+        continue;
+      }
+
+      if (action.type === 'rename_category' && action.from && action.to) {
+        if (Store.renameBaguCategory(deptId, moduleId, bankId, action.from, action.to)) {
+          this.baguDraft = null;
+          this.baguEditing = null;
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
       try {
         await Store.flushSave();
       } catch {
         /* local ok */
       }
+      // 保留对话面板，后台刷新列表/详情
+      const catOpen = this.baguCatOpen ? { ...this.baguCatOpen } : null;
+      const pending = this.baguCatPending;
       this.render();
-      alert(`已完成智能排序（${(data.items || [])[0]?.source === 'llm' ? 'LLM' : '规则引擎'}）`);
-    } catch (err) {
-      alert(err.message || '智能排序失败');
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = '智能排序';
+      if (catOpen?.bankId) {
+        Store.setBaguCatPending(catOpen.bankId, pending);
+        this.openBaguCatPanel(catOpen.deptId, catOpen.moduleId, catOpen.bankId);
       }
     }
+    return changed;
+  },
+
+  /** 实时刷新题库卡片/详情页上的介绍文案 */
+  patchBaguBankDescInDom(bankId, desc) {
+    const text = String(desc || '').trim() || '暂无介绍';
+    document.querySelectorAll('.bagu-bank-card[data-bank]').forEach((card) => {
+      if (card.dataset.bank !== bankId) return;
+      const el = card.querySelector('.bagu-bank-desc');
+      if (el) el.textContent = text;
+    });
+    const detailDesc = document.querySelector('.module-page-bagu-detail .bagu-detail-desc');
+    if (detailDesc && this.route?.baguBank === bankId) {
+      detailDesc.textContent = text;
+    }
+  },
+
+  async readNdjsonStream(res, onEvent) {
+    if (!res.body) {
+      const text = await res.text();
+      const lines = text.split(/\r?\n/).filter(Boolean);
+      for (const line of lines) {
+        try {
+          onEvent(JSON.parse(line));
+        } catch {
+          /* ignore */
+        }
+      }
+      return;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          onEvent(JSON.parse(trimmed));
+        } catch {
+          /* ignore partial */
+        }
+      }
+    }
+    if (buffer.trim()) {
+      try {
+        onEvent(JSON.parse(buffer.trim()));
+      } catch {
+        /* ignore */
+      }
+    }
+  },
+
+  beginBaguCatStreamBubble() {
+    this.hideBaguCatTyping();
+    const box = document.getElementById('baguCatMessages');
+    if (!box) return null;
+    const id = `baguCatStream-${Date.now()}`;
+    box.insertAdjacentHTML(
+      'beforeend',
+      `<div class="bagu-cat-msg is-assistant" id="${id}">
+        <span class="bagu-cat-msg-avatar" aria-hidden="true"><img src="/images/bagu-cat.png" alt=""></span>
+        <div class="bagu-cat-msg-bubble"><span class="bagu-cat-stream-text"></span></div>
+      </div>`
+    );
+    box.scrollTop = box.scrollHeight;
+    const self = this;
+    return {
+      id,
+      el: document.querySelector(`#${id} .bagu-cat-stream-text`),
+      setText(text) {
+        if (this.el) this.el.innerHTML = self.formatChatContent(text);
+        box.scrollTop = box.scrollHeight;
+      },
+      remove() {
+        document.getElementById(id)?.remove();
+      },
+    };
+  },
+
+  async handleBaguCatSend() {
+    if (!this.baguCatOpen || this.baguCatBusy || this.baguCatOpen.picking || !this.baguCatOpen.bankId) return;
+    const { deptId, moduleId, bankId } = this.baguCatOpen;
+    const input = document.getElementById('baguCatInput');
+    const text = input?.value?.trim();
+    if (!text) return;
+
+    const bank = getBaguBank(bankId);
+    Store.addBaguCatMessage(bankId, { role: 'user', content: text });
+    if (input) {
+      input.value = '';
+      input.style.height = 'auto';
+    }
+    this.renderBaguCatMessages();
+    this.showBaguCatTyping();
+    this.baguCatBusy = true;
+    const sendBtn = document.getElementById('btnBaguCatSend');
+    if (sendBtn) sendBtn.disabled = true;
+
+    let streamBubble = null;
+    try {
+      const messages = this.getBaguCatMessages(bankId);
+      // 多带一些历史，让八股猫记住之前的对话与约定
+      const history = messages.slice(0, -1).slice(-24).map((m) => ({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        content: m.content,
+      }));
+      const res = await fetch('/api/bagu/cat', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stream: true,
+          message: text,
+          bank: {
+            id: bankId,
+            name: bank?.name || '',
+            desc: bank?.desc || '',
+            categories: bank?.categories || [],
+          },
+          banks: (typeof listBaguBanks === 'function' ? listBaguBanks() : []).map((b) => ({
+            id: b.id,
+            name: b.name || '',
+            desc: b.desc || '',
+          })),
+          pending: this.baguCatPending || Store.getBaguCatPending(bankId),
+          questions: this.buildBaguCatQuestionPayload(deptId, moduleId, bankId),
+          history,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || '八股猫开小差了');
+      }
+
+      let replyText = '';
+      let actions = [];
+      let pending = null;
+      let streamError = null;
+
+      await this.readNdjsonStream(res, (ev) => {
+        if (!ev || typeof ev !== 'object') return;
+        if (ev.type === 'delta') {
+          if (!streamBubble) streamBubble = this.beginBaguCatStreamBubble();
+          replyText = ev.reply != null ? String(ev.reply) : replyText + String(ev.text || '');
+          streamBubble?.setText(replyText);
+        } else if (ev.type === 'done') {
+          replyText = String(ev.reply || replyText || '').trim();
+          actions = Array.isArray(ev.actions) ? ev.actions : [];
+          pending = ev.pending || null;
+        } else if (ev.type === 'error') {
+          streamError = ev.error || '八股猫开小差了';
+        }
+      });
+
+      if (streamError) throw new Error(streamError);
+
+      this.hideBaguCatTyping();
+      streamBubble?.remove();
+      this.baguCatPending = pending;
+      Store.setBaguCatPending(bankId, pending);
+
+      if (
+        !actions.length &&
+        !this.baguCatPending &&
+        /(已(经)?(帮你)?(完成|写好|添加|更新|改好|设置好|生成好|弄好)|搞定了)/.test(replyText)
+      ) {
+        replyText =
+          '喵～这件事我刚才没有真正改到数据。卡点：缺少可执行动作。请再说一次具体需求～';
+      }
+      if (actions.length && !replyText) {
+        replyText = '喵～已经帮你改好题库啦～';
+      }
+      Store.addBaguCatMessage(bankId, {
+        role: 'assistant',
+        content: replyText || '喵～好的',
+      });
+      this.renderBaguCatMessages();
+
+      if (actions.length) {
+        await this.applyBaguCatActions(deptId, moduleId, bankId, actions);
+      }
+    } catch (err) {
+      this.hideBaguCatTyping();
+      streamBubble?.remove();
+      Store.addBaguCatMessage(bankId, {
+        role: 'assistant',
+        content: `喵…出错了：${err.message || '请稍后再试'}`,
+      });
+      this.renderBaguCatMessages();
+    } finally {
+      this.baguCatBusy = false;
+      if (sendBtn) sendBtn.disabled = false;
+      document.getElementById('baguCatInput')?.focus();
+    }
+  },
+
+  bindBaguCatPanel() {
+    const overlay = document.getElementById('baguCatOverlay');
+    if (!overlay || overlay.dataset.bound === '1') return;
+    overlay.dataset.bound = '1';
+
+    document.getElementById('baguCatClose')?.addEventListener('click', () => this.closeBaguCatPanel());
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) this.closeBaguCatPanel();
+    });
+    document.getElementById('btnBaguCatSend')?.addEventListener('click', () => this.handleBaguCatSend());
+    document.getElementById('baguCatInput')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        this.handleBaguCatSend();
+      }
+    });
+    document.getElementById('baguCatInput')?.addEventListener('input', (e) => {
+      const el = e.target;
+      el.style.height = 'auto';
+      el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+    });
   },
 
   bindLeetcodeLookup() {
@@ -10282,7 +11372,7 @@ const App = {
                   <button type="button" class="btn btn-secondary" id="btnBaguClassify">自动识别</button>
                 </div>
                 <input type="hidden" name="learnOrder" id="baguLearnOrderInput" value="${this.escapeHtml(String(learnOrderVal))}">
-                <p class="form-hint lc-lookup-hint" id="baguClassifyHint">输入题目后点「自动识别」，将填充分类、难度、标签，并按学习曲线排序</p>
+                <p class="form-hint lc-lookup-hint" id="baguClassifyHint">输入题目后点「自动识别」，按四层标题填充分类、标签、考点，以及难度、频率</p>
               </div>`;
           }
           if (isLeetcode && f.key === 'lcNumber') {
@@ -10333,9 +11423,11 @@ const App = {
             const bankForCategory = getBaguBank(presetBank || existingData?.bank || '');
             const categories = bankForCategory?.categories || [];
             if (categories.length) {
+              const options = [...categories];
+              if (val && !options.includes(String(val))) options.unshift(String(val));
               const optionsHtml = [
                 `<option value="">请选择分类</option>`,
-                ...categories.map((c) => {
+                ...options.map((c) => {
                   const selected = String(val) === String(c) ? 'selected' : '';
                   return `<option value="${this.escapeHtml(c)}" ${selected}>${this.escapeHtml(c)}</option>`;
                 }),
@@ -10350,7 +11442,7 @@ const App = {
               <div class="form-group">
                 <label>${f.label}</label>
                 <input type="text" name="${f.key}" value="${this.escapeHtml(String(val))}"
-                  placeholder="如 索引、事务与锁">
+                  placeholder="${this.escapeHtml(f.placeholder || '如 索引、事务与锁')}">
               </div>`;
           }
           if (f.type === 'richtext') {
@@ -10909,6 +12001,30 @@ const App = {
     return canvas.toDataURL('image/jpeg', 0.85);
   },
 
+  /** 题库图标：白底 + 居中 contain，避免透明图导出成黑底 */
+  async compressBaguBankLogo(file) {
+    if (!file.type.startsWith('image/')) throw new Error('请选择图片文件');
+    if (file.size > 2 * 1024 * 1024) throw new Error('图片不能超过 2MB');
+
+    const bitmap = await createImageBitmap(file);
+    const size = 160;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, size, size);
+
+    const scale = Math.min(size / bitmap.width, size / bitmap.height);
+    const dw = Math.max(1, Math.round(bitmap.width * scale));
+    const dh = Math.max(1, Math.round(bitmap.height * scale));
+    const dx = Math.round((size - dw) / 2);
+    const dy = Math.round((size - dh) / 2);
+    ctx.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height, dx, dy, dw, dh);
+    bitmap.close();
+    return canvas.toDataURL('image/jpeg', 0.9);
+  },
+
   openProfileModal() {
     const profile = Store.getProfile();
     this.profileDraft = {
@@ -11010,7 +12126,7 @@ const App = {
     document.getElementById('modalTitle').textContent = '⚙️ LLM 设置';
     const form = document.getElementById('recordForm');
     form.innerHTML = `
-      <p class="settings-hint">通过本地服务转发连接 Kimi，避免浏览器跨域问题。保存后可在聊天区看到连接状态。</p>
+      <p class="settings-hint">通过本地服务转发连接大模型，避免浏览器跨域问题。保存后可在聊天区看到连接状态。</p>
       <div class="form-group">
         <label>API Base URL</label>
         <input type="text" name="baseUrl" value="${s.baseUrl}" placeholder="https://api.moonshot.cn/v1">
@@ -11103,6 +12219,7 @@ const App = {
   },
 
   bindGlobal() {
+    this.bindBaguCatPanel();
     document.getElementById('modalClose').addEventListener('click', () => this.closeModal());
     document.getElementById('modalCancel').addEventListener('click', () => this.closeModal());
     document.getElementById('modalOverlay').addEventListener('click', (e) => {
